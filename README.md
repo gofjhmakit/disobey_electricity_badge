@@ -53,3 +53,7 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 
 - If Wi-Fi credentials are not saved, the device starts in config mode and will use cache only if available.
 - Adjust thresholds and LED brightness from the Start menu.
+
+## Result
+
+![Result](arduino_settings.png)
