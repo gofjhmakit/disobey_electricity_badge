@@ -45,8 +45,9 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 
 1. Open the `NordpoolPriceBadge` sketch in the Arduino IDE or PlatformIO.
 2. Select an ESP32 board.
-3. Install the listed libraries if needed.
-4. Upload and monitor serial output at 115200.
+3. ![Settings](arduino_settings.png)
+4. Install the listed libraries if needed.
+5. Upload and monitor serial output at 115200.
 
 ## Notes
 
