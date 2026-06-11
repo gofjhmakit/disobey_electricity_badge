@@ -56,4 +56,4 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 
 ## Result
 
-![Result](arduino_settings.png)
+![Result](badge.png)
