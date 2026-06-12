@@ -57,3 +57,12 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 ## Result
 
 ![Result](badge.png)
+
+## TODO
+
+1. Alternate screen for RSS News reader for Yle Kotimaa news
+    - https://yle.fi/rss/t/18-34837/fi)
+2. Show latest title from head news in the current blue top area
+    - https://yle.fi/rss/uutiset/paauutiset
+3. Add a setting to Enable/Disable RSS news
+4. Weather Forecast for today and tomorrow with nice visuals

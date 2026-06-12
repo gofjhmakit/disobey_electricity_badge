@@ -104,28 +104,51 @@ unsigned long lastRefreshMs = 0;
 unsigned long lastFetchMs = 0;
 unsigned long nextAllowedFetchMs = 0;
 unsigned long rateLimitUntilMs = 0;
+unsigned long lastInteractionMs = 0;
+bool powerSaveActive = false;
+const unsigned long POWER_SAVE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
+const uint8_t POWER_SAVE_LED_BRIGHTNESS = 10;
 bool gotTime = false;
 
 bool timeReached(unsigned long deadline) {
   return (long)(millis() - deadline) >= 0;
 }
 
-unsigned long getNextLocalMidnightMs() {
+unsigned long getNextLocalPublishMs(int publishHour, bool allowNow = false) {
   time_t now = time(nullptr);
   if (now == 0) {
     return millis() + 24UL * 60UL * 60UL * 1000UL;
   }
   tm local;
   localtime_r(&now, &local);
-  local.tm_hour = 0;
+  local.tm_hour = publishHour;
   local.tm_min = 0;
   local.tm_sec = 0;
-  time_t midnight = mktime(&local) + 24UL * 60UL * 60UL;
-  long deltaSeconds = (long)(midnight - now);
-  if (deltaSeconds < 0) {
-    deltaSeconds = 24UL * 60UL * 60UL;
+  time_t target = mktime(&local);
+  if (target == (time_t)-1) {
+    return millis() + 24UL * 60UL * 60UL * 1000UL;
   }
+  if (target <= now) {
+    if (allowNow) {
+      return millis();
+    }
+    target += 24UL * 60UL * 60UL;
+  }
+  long deltaSeconds = (long)(target - now);
   return millis() + (unsigned long)deltaSeconds * 1000UL;
+}
+
+unsigned long getNextDayForwardCheckMs() {
+  time_t now = time(nullptr);
+  if (now == 0) {
+    return millis() + 15UL * 60UL * 1000UL;
+  }
+  tm local;
+  localtime_r(&now, &local);
+  if (local.tm_hour < 16) {
+    return getNextLocalPublishMs(16, true);
+  }
+  return millis() + 15UL * 60UL * 1000UL;
 }
 
 bool hasPricesForDate(time_t target) {
@@ -171,8 +194,8 @@ void setupPins() {
 }
 
 void loadDefaults() {
-  settings.ssid = "wifi_ssid_here";
-  settings.password = "wifi_pw_here";
+  settings.ssid = "x";
+  settings.password = "x";
   settings.area = "FI";
   settings.thresholdCheap = 3;
   settings.thresholdModerate = 7;
@@ -354,7 +377,7 @@ int fetchNordpoolPrices() {
         if (urlIdx == 0) {
           continue;
         }
-        nextAllowedFetchMs = millis() + 15UL * 60UL * 1000UL;
+        nextAllowedFetchMs = getNextDayForwardCheckMs();
         rateLimitUntilMs = 0;
         return cacheCount;
       }
@@ -384,15 +407,7 @@ int fetchNordpoolPrices() {
       if (urlIdx == 0) {
         continue;
       }
-      nextAllowedFetchMs = millis() + 15UL * 60UL * 1000UL;
-      return cacheCount;
-    }
-
-    JsonArray array = doc.as<JsonArray>();
-    for (JsonObject item : array) {
-      if (cacheCount >= MAX_PRICE_POINTS) break;
-      const char *dateTime = item["DateTime"];
-      float price = item["PriceWithTax"].isNull() ? item["PriceNoTax"].as<float>() * 100.0f : item["PriceWithTax"].as<float>() * 100.0f;
+        nextAllowedFetchMs = getNextDayForwardCheckMs();
       if (!dateTime) continue;
 
       int year, month, day, hour;
@@ -414,9 +429,9 @@ int fetchNordpoolPrices() {
   }
 
   if (hasTomorrowPrices()) {
-    nextAllowedFetchMs = getNextLocalMidnightMs();
+    nextAllowedFetchMs = getNextLocalPublishMs(16);
     rateLimitUntilMs = 0;
-    debugLog("Tomorrow prices cached; next fetch deferred until local midnight.");
+    debugLog("Tomorrow prices cached; next fetch deferred until local 16:00.");
   } else {
     nextAllowedFetchMs = millis() + 15UL * 60UL * 1000UL;
   }
@@ -468,14 +483,110 @@ void updateLEDsForHour(float currentPrice, float nextPrice) {
   CRGB leftColor = colorForValue(currentPrice);
   CRGB rightColor = colorForValue(nextPrice);
 
+  // The LED array is wired so the first 5 LEDs appear on the right side of the screen
+  // and the last 5 LEDs appear on the left side. Swap the halves so the left block
+  // shows the current hour and the right block shows the next hour.
   for (int i = 0; i < LED_AMOUNT; ++i) {
     if (i < LED_AMOUNT / 2) {
-      leds[i] = leftColor;
-    } else {
       leds[i] = rightColor;
+    } else {
+      leds[i] = leftColor;
     }
   }
   FastLED.show();
+}
+
+void updatePowerSaveLEDs(float currentPrice, float nextPrice) {
+  digitalWrite(LED_ACTIVATE_PIN, HIGH);
+  FastLED.setBrightness(POWER_SAVE_LED_BRIGHTNESS);
+  for (int i = 0; i < LED_AMOUNT; ++i) {
+    leds[i] = CRGB::Black;
+  }
+
+  CRGB currentColor = colorForValue(currentPrice);
+  CRGB nextColor = colorForValue(nextPrice);
+
+  // Use the central LED of each side for minimal power indication.
+  leds[7] = currentColor; // left side center
+  leds[2] = nextColor;    // right side center
+  FastLED.show();
+}
+
+void enterPowerSaveMode() {
+  if (powerSaveActive) {
+    return;
+  }
+  powerSaveActive = true;
+  digitalWrite(TFT_BL, LOW);
+
+  if (settings.ledBrightness == 0) {
+    digitalWrite(LED_ACTIVATE_PIN, LOW);
+    FastLED.clear(true);
+    return;
+  }
+
+  int startIndex = -1;
+  int count = 0;
+  float currentPrice = 0;
+  float nextPrice = 0;
+  if (findDayRange(selectedDayOffset, startIndex, count) > 0) {
+    time_t now = time(nullptr);
+    tm nowTm;
+    localtime_r(&now, &nowTm);
+    currentPrice = cacheItems[startIndex].price;
+    nextPrice = currentPrice;
+    for (int i = startIndex; i < startIndex + count; ++i) {
+      if (selectedDayOffset == 0 && cacheItems[i].hour == nowTm.tm_hour) {
+        currentPrice = cacheItems[i].price;
+        if (i + 1 < startIndex + count) {
+          nextPrice = cacheItems[i + 1].price;
+        }
+        break;
+      }
+    }
+    updatePowerSaveLEDs(currentPrice, nextPrice);
+  } else {
+    FastLED.clear(true);
+  }
+}
+
+void exitPowerSaveMode() {
+  if (!powerSaveActive) {
+    return;
+  }
+  powerSaveActive = false;
+  digitalWrite(TFT_BL, HIGH);
+  if (showSettings) {
+    drawSettingsScreen();
+  } else {
+    drawMainScreen();
+  }
+}
+
+void registerInteraction() {
+  lastInteractionMs = millis();
+  if (powerSaveActive) {
+    exitPowerSaveMode();
+  }
+}
+
+bool consumeAnyButtonPressEvent() {
+  for (auto &button : buttons) {
+    if (button.currentState && !button.lastReportedState) {
+      button.lastReportedState = true;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool anyButtonIsPressed() {
+  for (auto &button : buttons) {
+    if (button.currentState) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void drawMainScreen() {
@@ -511,11 +622,14 @@ void drawMainScreen() {
 
   float cheapest = 1e6;
   float expensive = -1e6;
+  float sum = 0;
   for (int i = startIndex; i < startIndex + count; ++i) {
     float value = cacheItems[i].price;
     cheapest = min(cheapest, value);
     expensive = max(expensive, value);
+    sum += value;
   }
+  float average = sum / count;
 
   int chartX = 12;
   int chartY = 60;
@@ -565,9 +679,9 @@ void drawMainScreen() {
     x += barWidth;
   }
 
-  String cheapestText = "Cheapest: " + String(cheapest, 2) + " c/kWh";
-  String expensiveText = "Most expensive: " + String(expensive, 2) + " c/kWh";
-  drawFooter(cheapestText, expensiveText);
+  String lowHighText = "Low: " + String(cheapest, 2) + " c  High: " + String(expensive, 2) + " c";
+  String averageText = "Avg: " + String(average, 2) + " c/kWh";
+  drawFooter(lowHighText, averageText);
 
   float currentPrice = cacheItems[startIndex].price;
   float nextPrice = currentPrice;
@@ -722,8 +836,8 @@ void setup() {
   bool hadCache = loadCache();
   Serial.printf("Cache loaded: %d entries\n", cacheCount);
   if (hadCache && hasTomorrowPrices()) {
-    nextAllowedFetchMs = getNextLocalMidnightMs();
-    debugLog("Tomorrow prices already cached at startup; deferring next fetch until midnight.");
+    nextAllowedFetchMs = getNextLocalPublishMs(16);
+    debugLog("Tomorrow prices already cached at startup; deferring next fetch until local 16:00.");
   }
 
   if (connectWiFi()) {
@@ -757,10 +871,33 @@ void setup() {
   if (cacheCount > 0) {
     Serial.println("Displaying main screen");
     drawMainScreen();
+    // Ensure LEDs are refreshed after startup and after the first data display.
+    if (!powerSaveActive) {
+      time_t now = time(nullptr);
+      tm nowTm;
+      localtime_r(&now, &nowTm);
+      int startIndex = -1;
+      int count = 0;
+      if (findDayRange(selectedDayOffset, startIndex, count) > 0) {
+        float currentPrice = cacheItems[startIndex].price;
+        float nextPrice = currentPrice;
+        for (int i = startIndex; i < startIndex + count; ++i) {
+          if (selectedDayOffset == 0 && cacheItems[i].hour == nowTm.tm_hour) {
+            currentPrice = cacheItems[i].price;
+            if (i + 1 < startIndex + count) {
+              nextPrice = cacheItems[i + 1].price;
+            }
+            break;
+          }
+        }
+        updateLEDsForHour(currentPrice, nextPrice);
+      }
+    }
   } else {
     Serial.println("No cached data available, config mode");
     drawConfigMode();
   }
+  lastInteractionMs = millis();
 }
 
 void updateButtonStates() {
@@ -810,6 +947,15 @@ void changeThreshold(int index, float delta) {
 
 void loop() {
   updateButtonStates();
+
+  if (anyButtonIsPressed()) {
+    lastInteractionMs = millis();
+  }
+
+  if (powerSaveActive && consumeAnyButtonPressEvent()) {
+    registerInteraction();
+    return;
+  }
 
   if (buttonPressedOnce(BTN_SELECT)) {
     debugLog("BTN_SELECT pressed: cycling brightness.");
@@ -899,10 +1045,18 @@ void loop() {
   }
 
   unsigned long now = millis();
+  if (!powerSaveActive && now - lastInteractionMs >= POWER_SAVE_TIMEOUT_MS) {
+    enterPowerSaveMode();
+  }
+
   if (now - lastFetchMs > 15UL * 60UL * 1000UL) {
     if (WiFi.status() == WL_CONNECTED && needsFetchForTomorrow() && shouldAttemptFetch()) {
       if (fetchNordpoolPrices() > 0) {
-        drawMainScreen();
+        if (!powerSaveActive) {
+          drawMainScreen();
+        } else {
+          enterPowerSaveMode();
+        }
       }
     }
     lastFetchMs = now;
