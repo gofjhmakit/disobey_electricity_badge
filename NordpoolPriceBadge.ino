@@ -28,6 +28,21 @@
 
 #define MAX_PRICE_POINTS  72
 #define MAX_BAR_COUNT     24
+#define MAX_WEATHER_DAYS  7
+
+#define SCREEN_PRICE_TODAY     0
+#define SCREEN_PRICE_TOMORROW  1
+#define SCREEN_WEATHER_TODAY   2
+#define SCREEN_WEATHER_TOMORROW 3
+#define SCREEN_WEATHER_WEEK    4
+#define SCREEN_COUNT           5
+
+#define WEATHER_CLEAR      0
+#define WEATHER_CLOUDY     1
+#define WEATHER_FOG        2
+#define WEATHER_RAIN       3
+#define WEATHER_SNOW       4
+#define WEATHER_THUNDER    5
 
 LGFX tft;
 CRGB leds[LED_AMOUNT];
@@ -64,6 +79,16 @@ struct HourItem {
   float price;
 };
 
+struct WeatherDay {
+  char date[11];
+  int weatherCode;
+  float tempMin;
+  float tempMax;
+  float precipitation;
+  int precipitationProbability;
+  float windSpeed;
+};
+
 struct BadgeSettings {
   String ssid;
   String password;
@@ -84,6 +109,8 @@ struct ButtonState {
 BadgeSettings settings;
 HourItem cacheItems[MAX_PRICE_POINTS];
 int cacheCount = 0;
+WeatherDay weatherDays[MAX_WEATHER_DAYS];
+int weatherCount = 0;
 
 ButtonState buttons[] = {
   {BTN_UP, false, false, false, 0},
@@ -99,13 +126,17 @@ ButtonState buttons[] = {
 
 bool showSettings = false;
 int settingsIndex = 0;
-int selectedDayOffset = 0;
+int activeScreen = SCREEN_PRICE_TODAY;
 unsigned long lastRefreshMs = 0;
 unsigned long lastFetchMs = 0;
+unsigned long lastWeatherFetchMs = 0;
+unsigned long lastWeatherLedFrameMs = 0;
 unsigned long nextAllowedFetchMs = 0;
 unsigned long rateLimitUntilMs = 0;
 unsigned long lastInteractionMs = 0;
 bool powerSaveActive = false;
+int lastPowerSaveLedUpdateSlot = -1;
+uint8_t weatherLedFrame = 0;
 const unsigned long POWER_SAVE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 const uint8_t POWER_SAVE_LED_BRIGHTNESS = 10;
 bool gotTime = false;
@@ -321,6 +352,17 @@ bool loadCache() {
       item["price"].as<float>()
     };
   }
+  float maxAbsPrice = 0;
+  for (int i = 0; i < cacheCount; ++i) {
+    maxAbsPrice = max(maxAbsPrice, fabsf(cacheItems[i].price));
+  }
+  if (maxAbsPrice > 0 && maxAbsPrice < 1.0f) {
+    debugLog("Cached prices look like EUR/kWh; converting to c/kWh.");
+    for (int i = 0; i < cacheCount; ++i) {
+      cacheItems[i].price *= 100.0f;
+    }
+    saveCache();
+  }
   debugLog("Cache loaded entries:", cacheCount);
   return cacheCount > 0;
 }
@@ -407,8 +449,24 @@ int fetchNordpoolPrices() {
       if (urlIdx == 0) {
         continue;
       }
-        nextAllowedFetchMs = getNextDayForwardCheckMs();
-      if (!dateTime) continue;
+      nextAllowedFetchMs = getNextDayForwardCheckMs();
+      return -1;
+    }
+
+    JsonArray priceArray = doc.as<JsonArray>();
+    for (JsonObject item : priceArray) {
+      if (cacheCount >= MAX_PRICE_POINTS) {
+        break;
+      }
+
+      float price = item["PriceWithTax"].as<float>() * 100.0f;
+      const char *dateTime = item["DateTime"].as<const char*>();
+      if (!dateTime) {
+        dateTime = item["Rank"].as<const char*>();
+      }
+      if (!dateTime) {
+        continue;
+      }
 
       int year, month, day, hour;
       if (sscanf(dateTime, "%d-%d-%dT%d:", &year, &month, &day, &hour) != 4) {
@@ -437,6 +495,73 @@ int fetchNordpoolPrices() {
   }
 
   return cacheCount;
+}
+
+bool fetchWeatherForecast() {
+  debugLog("fetchWeatherForecast: starting");
+  lastWeatherFetchMs = millis();
+  HTTPClient client;
+  String url = "https://api.open-meteo.com/v1/forecast";
+  url += "?latitude=62.1333&longitude=25.6667";
+  url += "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max";
+  url += "&timezone=Europe%2FHelsinki&forecast_days=7";
+  debugLog("Fetching weather from:", url.c_str());
+
+  client.begin(url);
+  client.useHTTP10(true);
+  client.addHeader("Accept", "application/json");
+  client.addHeader("Accept-Encoding", "identity");
+  int rc = client.GET();
+  if (rc != 200) {
+    Serial.printf("Weather HTTP failed: %d\n", rc);
+    String payload = client.getString();
+    if (payload.length() > 0) {
+      Serial.print("Weather payload begin: ");
+      Serial.println(payload.substring(0, min((size_t)200, payload.length())));
+    }
+    client.end();
+    return false;
+  }
+
+  String payload = client.getString();
+  client.end();
+  DynamicJsonDocument doc(12288);
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    debugLog("Weather JSON parse failed:", error.c_str());
+    Serial.print("Weather payload begin: ");
+    Serial.println(payload.substring(0, min((size_t)200, payload.length())));
+    return false;
+  }
+
+  JsonObject daily = doc["daily"];
+  JsonArray dates = daily["time"].as<JsonArray>();
+  JsonArray codes = daily["weather_code"].as<JsonArray>();
+  JsonArray maxTemps = daily["temperature_2m_max"].as<JsonArray>();
+  JsonArray minTemps = daily["temperature_2m_min"].as<JsonArray>();
+  JsonArray precipitation = daily["precipitation_sum"].as<JsonArray>();
+  JsonArray precipitationProbability = daily["precipitation_probability_max"].as<JsonArray>();
+  JsonArray windSpeed = daily["wind_speed_10m_max"].as<JsonArray>();
+
+  weatherCount = 0;
+  for (int i = 0; i < MAX_WEATHER_DAYS && i < dates.size(); ++i) {
+    const char *date = dates[i].as<const char*>();
+    if (!date) {
+      continue;
+    }
+    strncpy(weatherDays[weatherCount].date, date, sizeof(weatherDays[weatherCount].date) - 1);
+    weatherDays[weatherCount].date[sizeof(weatherDays[weatherCount].date) - 1] = '\0';
+    weatherDays[weatherCount].weatherCode = codes[i] | 0;
+    weatherDays[weatherCount].tempMax = maxTemps[i] | 0.0f;
+    weatherDays[weatherCount].tempMin = minTemps[i] | 0.0f;
+    weatherDays[weatherCount].precipitation = precipitation[i] | 0.0f;
+    weatherDays[weatherCount].precipitationProbability = precipitationProbability[i] | 0;
+    weatherDays[weatherCount].windSpeed = windSpeed[i] | 0.0f;
+    weatherCount++;
+  }
+
+  debugLog("Weather days parsed:", weatherCount);
+  return weatherCount > 0;
 }
 
 void drawHeader(const String &subtitle) {
@@ -512,41 +637,174 @@ void updatePowerSaveLEDs(float currentPrice, float nextPrice) {
   FastLED.show();
 }
 
-void enterPowerSaveMode() {
-  if (powerSaveActive) {
+uint8_t scaledLedBrightness() {
+  return (uint8_t)(255.0f * pow((float)settings.ledBrightness / 5.0f, 2.0f));
+}
+
+int weatherCategory(int code) {
+  if (code == 0) return WEATHER_CLEAR;
+  if (code == 45 || code == 48) return WEATHER_FOG;
+  if (code >= 95 && code <= 99) return WEATHER_THUNDER;
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return WEATHER_RAIN;
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return WEATHER_SNOW;
+  return WEATHER_CLOUDY;
+}
+
+bool activeWeatherDayIndex(int &dayIndex) {
+  if (activeScreen == SCREEN_WEATHER_TODAY) {
+    dayIndex = 0;
+    return true;
+  }
+  if (activeScreen == SCREEN_WEATHER_TOMORROW) {
+    dayIndex = 1;
+    return true;
+  }
+  return false;
+}
+
+void fillDimSnowLEDs() {
+  digitalWrite(LED_ACTIVATE_PIN, HIGH);
+  FastLED.setBrightness(min((uint8_t)60, scaledLedBrightness()));
+  for (int i = 0; i < LED_AMOUNT; ++i) {
+    leds[i] = CRGB(70, 70, 80);
+  }
+  FastLED.show();
+}
+
+void updateWeatherLEDAnimation() {
+  if (powerSaveActive || showSettings || settings.ledBrightness == 0) {
     return;
   }
-  powerSaveActive = true;
-  digitalWrite(TFT_BL, LOW);
 
+  int dayIndex = 0;
+  if (!activeWeatherDayIndex(dayIndex) || dayIndex >= weatherCount) {
+    return;
+  }
+
+  int category = weatherCategory(weatherDays[dayIndex].weatherCode);
+  unsigned long now = millis();
+  unsigned long frameInterval = category == WEATHER_RAIN ? 120UL : 45UL;
+  if (now - lastWeatherLedFrameMs < frameInterval) {
+    return;
+  }
+  lastWeatherLedFrameMs = now;
+  weatherLedFrame++;
+
+  digitalWrite(LED_ACTIVATE_PIN, HIGH);
+  FastLED.setBrightness(scaledLedBrightness());
+
+  if (category == WEATHER_CLEAR) {
+    for (int i = 0; i < LED_AMOUNT; ++i) {
+      uint8_t wave = sin8(weatherLedFrame * 6 + i * 22);
+      leds[i] = blend(CRGB::Orange, CRGB::Yellow, wave);
+    }
+  } else if (category == WEATHER_CLOUDY || category == WEATHER_FOG) {
+    uint8_t pulse = beatsin8(18, 35, category == WEATHER_FOG ? 95 : 135);
+    for (int i = 0; i < LED_AMOUNT; ++i) {
+      leds[i] = CRGB(pulse, pulse, pulse);
+    }
+  } else if (category == WEATHER_RAIN || category == WEATHER_THUNDER) {
+    const uint8_t fallOrder[LED_AMOUNT] = {7, 8, 9, 6, 5, 4, 3, 2, 1, 0};
+    FastLED.clear(false);
+    int drop = (weatherLedFrame / 2) % LED_AMOUNT;
+    leds[fallOrder[drop]] = category == WEATHER_THUNDER ? CRGB::Purple : CRGB::Blue;
+  } else if (category == WEATHER_SNOW) {
+    fillDimSnowLEDs();
+    return;
+  }
+
+  FastLED.show();
+}
+
+int getLocalHourSlot(const tm &timeInfo) {
+  return timeInfo.tm_yday * 24 + timeInfo.tm_hour;
+}
+
+bool findPriceForLocalTime(time_t target, float &price) {
+  if (target == 0) {
+    return false;
+  }
+
+  tm targetTm;
+  localtime_r(&target, &targetTm);
+  for (int i = 0; i < cacheCount; ++i) {
+    if (cacheItems[i].year == targetTm.tm_year + 1900 &&
+        cacheItems[i].month == targetTm.tm_mon + 1 &&
+        cacheItems[i].day == targetTm.tm_mday &&
+        cacheItems[i].hour == targetTm.tm_hour) {
+      price = cacheItems[i].price;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool getCurrentAndNextPrices(float &currentPrice, float &nextPrice) {
+  time_t now = time(nullptr);
+  if (now == 0 || !findPriceForLocalTime(now, currentPrice)) {
+    return false;
+  }
+
+  if (!findPriceForLocalTime(now + 60UL * 60UL, nextPrice)) {
+    nextPrice = currentPrice;
+  }
+  return true;
+}
+
+void refreshPowerSaveLEDs() {
   if (settings.ledBrightness == 0) {
     digitalWrite(LED_ACTIVATE_PIN, LOW);
     FastLED.clear(true);
     return;
   }
 
-  int startIndex = -1;
-  int count = 0;
   float currentPrice = 0;
   float nextPrice = 0;
-  if (findDayRange(selectedDayOffset, startIndex, count) > 0) {
-    time_t now = time(nullptr);
-    tm nowTm;
-    localtime_r(&now, &nowTm);
-    currentPrice = cacheItems[startIndex].price;
-    nextPrice = currentPrice;
-    for (int i = startIndex; i < startIndex + count; ++i) {
-      if (selectedDayOffset == 0 && cacheItems[i].hour == nowTm.tm_hour) {
-        currentPrice = cacheItems[i].price;
-        if (i + 1 < startIndex + count) {
-          nextPrice = cacheItems[i + 1].price;
-        }
-        break;
-      }
-    }
+  if (getCurrentAndNextPrices(currentPrice, nextPrice)) {
     updatePowerSaveLEDs(currentPrice, nextPrice);
   } else {
     FastLED.clear(true);
+  }
+}
+
+void updatePowerSaveLEDsOnHour() {
+  if (!powerSaveActive) {
+    return;
+  }
+
+  time_t now = time(nullptr);
+  if (now == 0) {
+    return;
+  }
+
+  tm nowTm;
+  localtime_r(&now, &nowTm);
+  if (nowTm.tm_min != 0) {
+    return;
+  }
+
+  int slot = getLocalHourSlot(nowTm);
+  if (slot == lastPowerSaveLedUpdateSlot) {
+    return;
+  }
+
+  refreshPowerSaveLEDs();
+  lastPowerSaveLedUpdateSlot = slot;
+}
+
+void enterPowerSaveMode() {
+  if (powerSaveActive) {
+    return;
+  }
+  powerSaveActive = true;
+  digitalWrite(TFT_BL, LOW);
+  refreshPowerSaveLEDs();
+
+  time_t now = time(nullptr);
+  if (now != 0) {
+    tm nowTm;
+    localtime_r(&now, &nowTm);
+    lastPowerSaveLedUpdateSlot = getLocalHourSlot(nowTm);
   }
 }
 
@@ -559,7 +817,7 @@ void exitPowerSaveMode() {
   if (showSettings) {
     drawSettingsScreen();
   } else {
-    drawMainScreen();
+    drawCurrentScreen();
   }
 }
 
@@ -595,6 +853,7 @@ void drawMainScreen() {
 
   tm timeInfo;
   getLocalTime(&timeInfo);
+  int selectedDayOffset = activeScreen == SCREEN_PRICE_TOMORROW ? 1 : 0;
   String dayLabel = selectedDayOffset == 0 ? "Today" : "Tomorrow";
   drawHeader("Wide hourly overview - " + dayLabel);
 
@@ -703,6 +962,197 @@ void drawMainScreen() {
   updateLEDsForHour(currentPrice, nextPrice);
 }
 
+const char* weatherDescription(int code) {
+  if (code == 0) return "Clear";
+  if (code == 1 || code == 2) return "Partly cloudy";
+  if (code == 3) return "Cloudy";
+  if (code == 45 || code == 48) return "Fog";
+  if (code >= 51 && code <= 57) return "Drizzle";
+  if (code >= 61 && code <= 67) return "Rain";
+  if (code >= 71 && code <= 77) return "Snow";
+  if (code >= 80 && code <= 82) return "Showers";
+  if (code >= 85 && code <= 86) return "Snow showers";
+  if (code >= 95 && code <= 99) return "Thunder";
+  return "Mixed";
+}
+
+uint16_t weatherColor(int code) {
+  if (code == 0) return TFT_YELLOW;
+  if (code <= 3) return TFT_CYAN;
+  if (code == 45 || code == 48) return 0xBDF7;
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return TFT_BLUE;
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return TFT_WHITE;
+  if (code >= 95) return TFT_ORANGE;
+  return TFT_LIGHTGREY;
+}
+
+void drawWeatherIcon(int x, int y, int code, int scale) {
+  uint16_t color = weatherColor(code);
+  if (code == 0) {
+    tft.fillCircle(x, y, 10 * scale, color);
+    for (int i = 0; i < 8; ++i) {
+      float angle = i * PI / 4.0f;
+      int x1 = x + cos(angle) * 14 * scale;
+      int y1 = y + sin(angle) * 14 * scale;
+      int x2 = x + cos(angle) * 20 * scale;
+      int y2 = y + sin(angle) * 20 * scale;
+      tft.drawLine(x1, y1, x2, y2, color);
+    }
+    return;
+  }
+
+  if (code == 45 || code == 48) {
+    tft.fillCircle(x - 9 * scale, y - 6 * scale, 9 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 3 * scale, y - 10 * scale, 12 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 14 * scale, y - 5 * scale, 8 * scale, TFT_LIGHTGREY);
+    tft.fillRect(x - 16 * scale, y - 5 * scale, 34 * scale, 10 * scale, TFT_LIGHTGREY);
+    for (int i = 0; i < 4; ++i) {
+      int yy = y + (8 + i * 5) * scale;
+      tft.drawFastHLine(x - 22 * scale, yy, 44 * scale, 0xBDF7);
+    }
+    return;
+  }
+
+  if (code >= 95) {
+    tft.fillTriangle(x - 8 * scale, y - 16 * scale, x + 7 * scale, y - 16 * scale,
+                     x - 1 * scale, y + 2 * scale, color);
+    tft.fillTriangle(x - 1 * scale, y - 2 * scale, x + 11 * scale, y - 2 * scale,
+                     x - 8 * scale, y + 18 * scale, color);
+    return;
+  }
+
+  if (code >= 51 && code <= 57) {
+    tft.fillCircle(x - 9 * scale, y - 5 * scale, 9 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 3 * scale, y - 10 * scale, 12 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 14 * scale, y - 4 * scale, 8 * scale, TFT_LIGHTGREY);
+    tft.fillRect(x - 16 * scale, y - 4 * scale, 34 * scale, 10 * scale, TFT_LIGHTGREY);
+    for (int i = -1; i <= 1; ++i) {
+      tft.drawPixel(x + i * 10 * scale, y + 15 * scale, color);
+      tft.drawPixel(x + i * 10 * scale, y + 18 * scale, color);
+    }
+    return;
+  }
+
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) {
+    tft.fillCircle(x - 9 * scale, y - 5 * scale, 9 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 3 * scale, y - 10 * scale, 12 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 14 * scale, y - 4 * scale, 8 * scale, TFT_LIGHTGREY);
+    tft.fillRect(x - 16 * scale, y - 4 * scale, 34 * scale, 10 * scale, TFT_LIGHTGREY);
+    for (int i = -1; i <= 1; ++i) {
+      tft.drawLine(x + i * 10 * scale, y + 12 * scale,
+                   x + i * 10 * scale - 4 * scale, y + 22 * scale, color);
+    }
+    return;
+  }
+
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) {
+    tft.fillCircle(x - 9 * scale, y - 5 * scale, 9 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 3 * scale, y - 10 * scale, 12 * scale, TFT_LIGHTGREY);
+    tft.fillCircle(x + 14 * scale, y - 4 * scale, 8 * scale, TFT_LIGHTGREY);
+    tft.fillRect(x - 16 * scale, y - 4 * scale, 34 * scale, 10 * scale, TFT_LIGHTGREY);
+    for (int i = -1; i <= 1; ++i) {
+      tft.fillCircle(x + i * 10 * scale, y + 17 * scale, 2 * scale, color);
+    }
+    return;
+  }
+
+  if (code == 1 || code == 2) {
+    tft.fillCircle(x - 12 * scale, y - 12 * scale, 8 * scale, TFT_YELLOW);
+  }
+  tft.fillCircle(x - 9 * scale, y - 3 * scale, 9 * scale, color);
+  tft.fillCircle(x + 3 * scale, y - 8 * scale, 12 * scale, color);
+  tft.fillCircle(x + 14 * scale, y - 2 * scale, 8 * scale, color);
+  tft.fillRect(x - 16 * scale, y - 2 * scale, 34 * scale, 10 * scale, color);
+}
+
+String shortDate(const char *date) {
+  if (!date || strlen(date) < 10) {
+    return "--";
+  }
+  return String(date + 5);
+}
+
+void drawWeatherDayScreen(int dayIndex) {
+  tft.fillScreen(TFT_BLACK);
+  String label = dayIndex == 0 ? "Today" : "Tomorrow";
+  drawHeader("Muurame weather - " + label);
+
+  if (dayIndex >= weatherCount) {
+    FastLED.clear(true);
+    tft.setTextColor(TFT_YELLOW);
+    tft.setTextSize(2);
+    tft.setCursor(4, 70);
+    tft.print("No weather data.");
+    drawFooter("Press B to refresh.", "Left/Right for screens.");
+    return;
+  }
+
+  WeatherDay &day = weatherDays[dayIndex];
+  drawWeatherIcon(54, 74, day.weatherCode, 2);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(2);
+  tft.setCursor(112, 38);
+  tft.print(shortDate(day.date));
+  tft.setCursor(112, 64);
+  tft.print(weatherDescription(day.weatherCode));
+
+  tft.setTextSize(1);
+  tft.setCursor(112, 96);
+  tft.printf("Temp %.0f..%.0f C", day.tempMin, day.tempMax);
+  tft.setCursor(112, 110);
+  tft.printf("Rain %.1f mm  %d%%", day.precipitation, day.precipitationProbability);
+  tft.setCursor(112, 124);
+  tft.printf("Wind %.0f km/h", day.windSpeed);
+  drawFooter("Open-Meteo forecast", "Left/Right for price/weather.");
+}
+
+void drawWeatherWeekScreen() {
+  tft.fillScreen(TFT_BLACK);
+  drawHeader("Muurame weather - 7 days");
+  FastLED.clear(true);
+
+  if (weatherCount <= 0) {
+    tft.setTextColor(TFT_YELLOW);
+    tft.setTextSize(2);
+    tft.setCursor(4, 70);
+    tft.print("No weather data.");
+    drawFooter("Press B to refresh.", "Left/Right for screens.");
+    return;
+  }
+
+  int rowH = 17;
+  int y = 28;
+  tft.setTextSize(1);
+  for (int i = 0; i < weatherCount; ++i) {
+    WeatherDay &day = weatherDays[i];
+    uint16_t color = weatherColor(day.weatherCode);
+    tft.fillCircle(8, y + 6, 4, color);
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(18, y + 1);
+    tft.print(shortDate(day.date));
+    tft.setCursor(72, y + 1);
+    tft.printf("%4.0f..%4.0f C", day.tempMin, day.tempMax);
+    tft.setCursor(160, y + 1);
+    tft.printf("%3d%%", day.precipitationProbability);
+    tft.setCursor(206, y + 1);
+    tft.print(weatherDescription(day.weatherCode));
+    y += rowH;
+  }
+  drawFooter("Dot=color, %=rain risk", "B refreshes data.");
+}
+
+void drawCurrentScreen() {
+  if (activeScreen == SCREEN_PRICE_TODAY || activeScreen == SCREEN_PRICE_TOMORROW) {
+    drawMainScreen();
+  } else if (activeScreen == SCREEN_WEATHER_TODAY) {
+    drawWeatherDayScreen(0);
+  } else if (activeScreen == SCREEN_WEATHER_TOMORROW) {
+    drawWeatherDayScreen(1);
+  } else {
+    drawWeatherWeekScreen();
+  }
+}
+
 void drawSettingsScreen() {
   tft.fillScreen(TFT_BLACK);
   drawHeader("Threshold settings");
@@ -735,14 +1185,6 @@ void drawConfigMode() {
   tft.setCursor(4, 100);
   tft.print("Use Serial or save settings");
   drawFooter("Set SSID/password via code.", "Restart after updating.");
-}
-
-void showDayHint() {
-  String dayLabel = selectedDayOffset == 0 ? "Today" : "Tomorrow";
-  tft.setCursor(220, 4);
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);
-  tft.print(dayLabel);
 }
 
 bool connectWiFi() {
@@ -859,6 +1301,7 @@ void setup() {
     } else {
       debugLog("Tomorrow prices already cached or fetch throttled.");
     }
+    fetchWeatherForecast();
   } else {
     debugLog("WiFi connection failed.");
     if (!hadCache) {
@@ -869,27 +1312,13 @@ void setup() {
   }
 
   if (cacheCount > 0) {
-    Serial.println("Displaying main screen");
-    drawMainScreen();
+    Serial.println("Displaying current screen");
+    drawCurrentScreen();
     // Ensure LEDs are refreshed after startup and after the first data display.
     if (!powerSaveActive) {
-      time_t now = time(nullptr);
-      tm nowTm;
-      localtime_r(&now, &nowTm);
-      int startIndex = -1;
-      int count = 0;
-      if (findDayRange(selectedDayOffset, startIndex, count) > 0) {
-        float currentPrice = cacheItems[startIndex].price;
-        float nextPrice = currentPrice;
-        for (int i = startIndex; i < startIndex + count; ++i) {
-          if (selectedDayOffset == 0 && cacheItems[i].hour == nowTm.tm_hour) {
-            currentPrice = cacheItems[i].price;
-            if (i + 1 < startIndex + count) {
-              nextPrice = cacheItems[i + 1].price;
-            }
-            break;
-          }
-        }
+      float currentPrice = 0;
+      float nextPrice = 0;
+      if (getCurrentAndNextPrices(currentPrice, nextPrice)) {
         updateLEDsForHour(currentPrice, nextPrice);
       }
     }
@@ -961,7 +1390,7 @@ void loop() {
     debugLog("BTN_SELECT pressed: cycling brightness.");
     settings.ledBrightness = (settings.ledBrightness + 1) % 6;
     saveSettings();
-    drawMainScreen();
+    drawCurrentScreen();
   }
 
   if (buttonPressedOnce(BTN_START)) {
@@ -971,7 +1400,7 @@ void loop() {
     if (showSettings) {
       drawSettingsScreen();
     } else {
-      drawMainScreen();
+      drawCurrentScreen();
     }
   }
 
@@ -999,25 +1428,25 @@ void loop() {
     if (buttonPressedOnce(BTN_A) || buttonPressedOnce(BTN_B)) {
       debugLog("BTN_A or BTN_B pressed: exit settings.");
       showSettings = false;
-      drawMainScreen();
+      drawCurrentScreen();
     }
     return;
   }
 
   if (buttonPressedOnce(BTN_LEFT)) {
-    debugLog("BTN_LEFT pressed: previous day.");
-    selectedDayOffset = max(0, selectedDayOffset - 1);
-    drawMainScreen();
+    debugLog("BTN_LEFT pressed: previous screen.");
+    activeScreen = max(0, activeScreen - 1);
+    drawCurrentScreen();
   }
   if (buttonPressedOnce(BTN_RIGHT)) {
-    debugLog("BTN_RIGHT pressed: next day.");
-    selectedDayOffset++;
-    drawMainScreen();
+    debugLog("BTN_RIGHT pressed: next screen.");
+    activeScreen = min(SCREEN_COUNT - 1, activeScreen + 1);
+    drawCurrentScreen();
   }
   if (buttonPressedOnce(BTN_STICK)) {
-    debugLog("BTN_STICK pressed: toggle today/tomorrow view.");
-    selectedDayOffset = (selectedDayOffset == 0) ? 1 : 0;
-    drawMainScreen();
+    debugLog("BTN_STICK pressed: toggle price today/tomorrow view.");
+    activeScreen = activeScreen == SCREEN_PRICE_TODAY ? SCREEN_PRICE_TOMORROW : SCREEN_PRICE_TODAY;
+    drawCurrentScreen();
   }
   if (buttonPressedOnce(BTN_B)) {
     debugLog("BTN_B pressed: manual refresh.");
@@ -1030,7 +1459,8 @@ void loop() {
       } else {
         debugLog("Refresh skipped: data already current or fetch throttled.");
       }
-      drawMainScreen();
+      fetchWeatherForecast();
+      drawCurrentScreen();
     } else {
       tft.fillRect(0, 90, 320, 30, TFT_BLACK);
       tft.setTextColor(TFT_YELLOW);
@@ -1040,25 +1470,34 @@ void loop() {
     }
   }
   if (buttonPressedOnce(BTN_A)) {
-    debugLog("BTN_A pressed: redraw main screen.");
-    drawMainScreen();
+    debugLog("BTN_A pressed: redraw current screen.");
+    drawCurrentScreen();
   }
 
   unsigned long now = millis();
   if (!powerSaveActive && now - lastInteractionMs >= POWER_SAVE_TIMEOUT_MS) {
     enterPowerSaveMode();
   }
+  updatePowerSaveLEDsOnHour();
+  updateWeatherLEDAnimation();
 
   if (now - lastFetchMs > 15UL * 60UL * 1000UL) {
     if (WiFi.status() == WL_CONNECTED && needsFetchForTomorrow() && shouldAttemptFetch()) {
       if (fetchNordpoolPrices() > 0) {
         if (!powerSaveActive) {
-          drawMainScreen();
+          drawCurrentScreen();
         } else {
-          enterPowerSaveMode();
+          refreshPowerSaveLEDs();
         }
       }
     }
     lastFetchMs = now;
+  }
+
+  if (now - lastWeatherFetchMs > 3UL * 60UL * 60UL * 1000UL) {
+    if (WiFi.status() == WL_CONNECTED && fetchWeatherForecast() && !powerSaveActive &&
+        activeScreen >= SCREEN_WEATHER_TODAY) {
+      drawCurrentScreen();
+    }
   }
 }
