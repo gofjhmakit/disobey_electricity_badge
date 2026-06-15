@@ -35,7 +35,9 @@
 #define SCREEN_WEATHER_TODAY   2
 #define SCREEN_WEATHER_TOMORROW 3
 #define SCREEN_WEATHER_WEEK    4
-#define SCREEN_COUNT           5
+#define SCREEN_NEWS_KOTIMAA    5
+#define SCREEN_NEWS_KESKI_SUOMI 6
+#define SCREEN_COUNT           7
 
 #define WEATHER_CLEAR      0
 #define WEATHER_CLOUDY     1
@@ -43,6 +45,8 @@
 #define WEATHER_RAIN       3
 #define WEATHER_SNOW       4
 #define WEATHER_THUNDER    5
+
+#define MAX_NEWS_ITEMS     5
 
 LGFX tft;
 CRGB leds[LED_AMOUNT];
@@ -89,6 +93,16 @@ struct WeatherDay {
   float windSpeed;
 };
 
+struct NewsItem {
+  String title;
+  String pubDate;
+};
+
+bool fetchNewsFeed(const char* url, NewsItem* items, int &count, unsigned long &lastFetchMs);
+
+// Explicit prototype to fix Arduino auto-generation issues with custom structs
+void drawNewsScreenList(const String &header, NewsItem *items, int count);
+
 struct BadgeSettings {
   String ssid;
   String password;
@@ -111,6 +125,10 @@ HourItem cacheItems[MAX_PRICE_POINTS];
 int cacheCount = 0;
 WeatherDay weatherDays[MAX_WEATHER_DAYS];
 int weatherCount = 0;
+NewsItem newsItemsKotimaa[MAX_NEWS_ITEMS]; // Renamed for clarity
+int newsCountKotimaa = 0; // Renamed for clarity
+NewsItem newsItemsKeskiSuomi[MAX_NEWS_ITEMS]; // New for Keski-Suomi
+int newsCountKeskiSuomi = 0; // New for Keski-Suomi
 
 ButtonState buttons[] = {
   {BTN_UP, false, false, false, 0},
@@ -130,6 +148,8 @@ int activeScreen = SCREEN_PRICE_TODAY;
 unsigned long lastRefreshMs = 0;
 unsigned long lastFetchMs = 0;
 unsigned long lastWeatherFetchMs = 0;
+unsigned long lastNewsFetchMs = 0;
+unsigned long lastNewsKeskiSuomiFetchMs = 0; // New timestamp for Keski-Suomi news
 unsigned long lastWeatherLedFrameMs = 0;
 unsigned long nextAllowedFetchMs = 0;
 unsigned long rateLimitUntilMs = 0;
@@ -564,6 +584,69 @@ bool fetchWeatherForecast() {
   return weatherCount > 0;
 }
 
+bool fetchNewsFeed(const char* url, NewsItem* items, int &count, unsigned long &lastFetchMs) {
+  debugLog("fetchNewsFeed starting for:", url);
+  lastFetchMs = millis();
+  HTTPClient client;
+  client.begin(url);
+  client.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  client.setTimeout(10000); 
+
+  int rc = client.GET();
+  if (rc != 200) {
+    Serial.printf("fetchNewsFeed HTTP failed: %d\n", rc);
+    client.end();
+    return false;
+  }
+
+  String payload = client.getString();
+  client.end();
+  
+  if (payload.length() == 0) {
+    debugLog("fetchNewsFeed: Received empty payload");
+    return false;
+  }
+
+  count = 0;
+  int pos = 0;
+  while (count < MAX_NEWS_ITEMS) {
+    int itemStart = payload.indexOf("<item>", pos);
+    if (itemStart == -1) break;
+    int itemEnd = payload.indexOf("</item>", itemStart);
+    if (itemEnd == -1) break;
+
+    String itemStr = payload.substring(itemStart, itemEnd);
+    int titleStart = itemStr.indexOf("<title>");
+    int titleEnd = itemStr.indexOf("</title>");
+    if (titleStart != -1 && titleEnd != -1) {
+      String title = itemStr.substring(titleStart + 7, titleEnd);
+      title.replace("<![CDATA[", "");
+      title.replace("]]>", "");
+      title.replace("&amp;", "&");
+      title.replace("&quot;", "\"");
+      title.replace("&apos;", "'");
+      title.replace("&lt;", "<");
+      title.replace("&gt;", ">");
+      title.trim();
+      items[count].title = title;
+    }
+    int dateStart = itemStr.indexOf("<pubDate>");
+    int dateEnd = itemStr.indexOf("</pubDate>");
+    if (dateStart != -1 && dateEnd != -1) {
+      String date = itemStr.substring(dateStart + 9, dateEnd);
+      if (date.length() > 16) {
+        items[count].pubDate = date.substring(5, 16);
+      } else {
+        items[count].pubDate = date;
+      }
+    }
+    count++;
+    pos = itemEnd;
+  }
+  debugLog("fetchNewsFeed items parsed:", count);
+  return count > 0;
+}
+
 void drawHeader(const String &subtitle) {
   tft.fillRect(0, 0, 320, 24, TFT_NAVY);
   tft.setTextColor(TFT_WHITE);
@@ -704,10 +787,13 @@ void updateWeatherLEDAnimation() {
       leds[i] = CRGB(pulse, pulse, pulse);
     }
   } else if (category == WEATHER_RAIN || category == WEATHER_THUNDER) {
-    const uint8_t fallOrder[LED_AMOUNT] = {7, 8, 9, 6, 5, 4, 3, 2, 1, 0};
+    const uint8_t leftFall[] = {7, 8, 9, 6, 5};
+    const uint8_t rightFall[] = {4, 3, 2, 1, 0};
     FastLED.clear(false);
-    int drop = (weatherLedFrame / 2) % LED_AMOUNT;
-    leds[fallOrder[drop]] = category == WEATHER_THUNDER ? CRGB::Purple : CRGB::Blue;
+    int step = (weatherLedFrame / 2) % 5;
+    CRGB color = category == WEATHER_THUNDER ? CRGB::Purple : CRGB::Blue;
+    leds[leftFall[step]] = color;
+    leds[rightFall[step]] = color;
   } else if (category == WEATHER_SNOW) {
     fillDimSnowLEDs();
     return;
@@ -1141,6 +1227,57 @@ void drawWeatherWeekScreen() {
   drawFooter("Dot=color, %=rain risk", "B refreshes data.");
 }
 
+void drawNewsScreenList(const String &header, NewsItem *items, int count) {
+  tft.fillScreen(TFT_BLACK);
+  drawHeader(header);
+  FastLED.clear(true);
+
+  if (count <= 0) {
+    tft.setTextColor(TFT_YELLOW);
+    tft.setTextSize(2);
+    tft.setCursor(4, 70);
+    tft.print("No news available.");
+    drawFooter("Press B to refresh.", "Left/Right for screens.");
+    return;
+  }
+
+  tft.setTextSize(1);
+  tft.setTextWrap(true);
+  int y = 28;
+
+  for (int i = 0; i < count; i++) {
+    tft.setCursor(4, y);
+    tft.setTextColor(TFT_YELLOW);
+    tft.print(items[i].pubDate + ": ");
+    tft.setTextColor(TFT_WHITE);
+    tft.println(items[i].title);
+    
+    y = tft.getCursorY() + 4;
+    if (i < count - 1 && y < 145) {
+      tft.drawFastHLine(2, y - 2, 316, 0x4208); // Dark grey separator line
+    }
+    if (y > 145) break; 
+  }
+
+  drawFooter("Use Left/Right to browse", "B to refresh news.");
+}
+
+bool fetchKotimaaNews() {
+  return fetchNewsFeed("https://yle.fi/rss/t/18-34837/fi", newsItemsKotimaa, newsCountKotimaa, lastNewsFetchMs);
+}
+
+bool fetchKeskiSuomiNews() {
+  return fetchNewsFeed("https://yle.fi/rss/t/18-148148/fi", newsItemsKeskiSuomi, newsCountKeskiSuomi, lastNewsKeskiSuomiFetchMs);
+}
+
+void drawKotimaaNewsScreen() {
+  drawNewsScreenList("Yle News: Kotimaa - Latest", newsItemsKotimaa, newsCountKotimaa);
+}
+
+void drawKeskiSuomiNewsScreen() {
+  drawNewsScreenList("Yle News: Keski-Suomi - Latest", newsItemsKeskiSuomi, newsCountKeskiSuomi);
+}
+
 void drawCurrentScreen() {
   if (activeScreen == SCREEN_PRICE_TODAY || activeScreen == SCREEN_PRICE_TOMORROW) {
     drawMainScreen();
@@ -1148,8 +1285,12 @@ void drawCurrentScreen() {
     drawWeatherDayScreen(0);
   } else if (activeScreen == SCREEN_WEATHER_TOMORROW) {
     drawWeatherDayScreen(1);
-  } else {
+  } else if (activeScreen == SCREEN_WEATHER_WEEK) {
     drawWeatherWeekScreen();
+  } else if (activeScreen == SCREEN_NEWS_KOTIMAA) {
+    drawKotimaaNewsScreen();
+  } else if (activeScreen == SCREEN_NEWS_KESKI_SUOMI) {
+    drawKeskiSuomiNewsScreen();
   }
 }
 
@@ -1302,6 +1443,8 @@ void setup() {
       debugLog("Tomorrow prices already cached or fetch throttled.");
     }
     fetchWeatherForecast();
+    fetchKotimaaNews(); // Existing news fetch
+    fetchKeskiSuomiNews(); // New news fetch
   } else {
     debugLog("WiFi connection failed.");
     if (!hadCache) {
@@ -1460,6 +1603,8 @@ void loop() {
         debugLog("Refresh skipped: data already current or fetch throttled.");
       }
       fetchWeatherForecast();
+      fetchKotimaaNews();
+      fetchKeskiSuomiNews();
       drawCurrentScreen();
     } else {
       tft.fillRect(0, 90, 320, 30, TFT_BLACK);
@@ -1497,6 +1642,20 @@ void loop() {
   if (now - lastWeatherFetchMs > 3UL * 60UL * 60UL * 1000UL) {
     if (WiFi.status() == WL_CONNECTED && fetchWeatherForecast() && !powerSaveActive &&
         activeScreen >= SCREEN_WEATHER_TODAY) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - lastNewsFetchMs > 60UL * 60UL * 1000UL) { // Existing Kotimaa news refresh
+    if (WiFi.status() == WL_CONNECTED && fetchKotimaaNews() && !powerSaveActive &&
+        activeScreen == SCREEN_NEWS_KOTIMAA) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - lastNewsKeskiSuomiFetchMs > 60UL * 60UL * 1000UL) { // New Keski-Suomi news refresh
+    if (WiFi.status() == WL_CONNECTED && fetchKeskiSuomiNews() && !powerSaveActive &&
+        activeScreen == SCREEN_NEWS_KESKI_SUOMI) {
       drawCurrentScreen();
     }
   }
