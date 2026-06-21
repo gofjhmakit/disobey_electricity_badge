@@ -37,7 +37,8 @@
 #define SCREEN_WEATHER_WEEK    4
 #define SCREEN_NEWS_KOTIMAA    5
 #define SCREEN_NEWS_KESKI_SUOMI 6
-#define SCREEN_COUNT           7
+#define SCREEN_STOCKS          7
+#define SCREEN_COUNT           8
 
 #define WEATHER_CLEAR      0
 #define WEATHER_CLOUDY     1
@@ -47,6 +48,9 @@
 #define WEATHER_THUNDER    5
 
 #define MAX_NEWS_ITEMS     5
+#define MAX_STOCKS          8
+#define STOCK_FETCH_INTERVAL_MS  (60UL * 60UL * 1000UL)  // 1 hour
+#define STOCK_RATE_LIMIT_MS     (60UL * 60UL * 1000UL)  // 1 hour if rate limited
 
 LGFX tft;
 CRGB leds[LED_AMOUNT];
@@ -75,6 +79,24 @@ void debugLog(const char *msg, float value) {
   Serial.println(value);
 }
 
+// Network request logging helpers
+void logNetworkRequest(const char* tag, const char* url) {
+  Serial.print("[NET] ");
+  Serial.print(tag);
+  Serial.print(" -> GET ");
+  Serial.println(url);
+}
+
+void logNetworkResponse(const char* tag, int code, size_t len) {
+  Serial.print("[NET] ");
+  Serial.print(tag);
+  Serial.print(" <- ");
+  Serial.print(code);
+  Serial.print(" (");
+  Serial.print(len);
+  Serial.println(" B)");
+}
+
 struct HourItem {
   int year;
   int month;
@@ -98,7 +120,17 @@ struct NewsItem {
   String pubDate;
 };
 
+struct StockItem {
+  String symbol;
+  String name;
+  float price;
+  float change;
+  float changePercent;
+  bool fetched;
+};
+
 bool fetchNewsFeed(const char* url, NewsItem* items, int &count, unsigned long &lastFetchMs);
+bool fetchStocks();
 
 // Explicit prototype to fix Arduino auto-generation issues with custom structs
 void drawNewsScreenList(const String &header, NewsItem *items, int count);
@@ -129,6 +161,12 @@ NewsItem newsItemsKotimaa[MAX_NEWS_ITEMS]; // Renamed for clarity
 int newsCountKotimaa = 0; // Renamed for clarity
 NewsItem newsItemsKeskiSuomi[MAX_NEWS_ITEMS]; // New for Keski-Suomi
 int newsCountKeskiSuomi = 0; // New for Keski-Suomi
+
+StockItem stocks[MAX_STOCKS];
+int stockCount = 0;
+unsigned long lastStockFetchMs = 0;
+unsigned long stockRateLimitUntilMs = 0;  // Rate limit timestamp for stocks
+time_t lastStockMarketTimestamp = 0;  // Timestamp from API (market data date)
 
 ButtonState buttons[] = {
   {BTN_UP, false, false, false, 0},
@@ -416,7 +454,6 @@ int findDayRange(int offset, int &startIndex, int &count) {
 
 int fetchNordpoolPrices() {
   debugLog("fetchNordpoolPrices: starting");
-  HTTPClient client;
 
   cacheCount = 0;
 
@@ -427,15 +464,18 @@ int fetchNordpoolPrices() {
 
   for (int urlIdx = 0; urlIdx < 2; ++urlIdx) {
     String url = urls[urlIdx];
-    debugLog("Fetching prices from:", url.c_str());
+    logNetworkRequest("PRICE", url.c_str());
 
+    HTTPClient client;
     client.begin(url);
+    client.setTimeout(15000);
     int rc = client.GET();
     if (rc != 200) {
+      client.end();
+      logNetworkResponse("PRICE", rc, 0);
       Serial.printf("HTTP failed: %d\n", rc);
       if (rc == 404) {
         debugLog("Remote API returned 404: prices not available yet.");
-        client.end();
         if (urlIdx == 0) {
           continue;
         }
@@ -447,10 +487,8 @@ int fetchNordpoolPrices() {
         debugLog("Remote API returned 429: too many requests.");
         rateLimitUntilMs = millis() + 60UL * 60UL * 1000UL;
         nextAllowedFetchMs = rateLimitUntilMs;
-        client.end();
         return -1;
       }
-      client.end();
       if (urlIdx == 0) {
         continue;
       }
@@ -459,6 +497,7 @@ int fetchNordpoolPrices() {
 
     String payload = client.getString();
     client.end();
+    logNetworkResponse("PRICE", rc, payload.length());
     DynamicJsonDocument doc(32768);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
@@ -525,26 +564,29 @@ bool fetchWeatherForecast() {
   url += "?latitude=62.1333&longitude=25.6667";
   url += "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max";
   url += "&timezone=Europe%2FHelsinki&forecast_days=7";
-  debugLog("Fetching weather from:", url.c_str());
+  logNetworkRequest("WEATHER", url.c_str());
 
   client.begin(url);
+  client.setTimeout(15000);
   client.useHTTP10(true);
   client.addHeader("Accept", "application/json");
   client.addHeader("Accept-Encoding", "identity");
   int rc = client.GET();
   if (rc != 200) {
+    client.end();
+    logNetworkResponse("WEATHER", rc, 0);
     Serial.printf("Weather HTTP failed: %d\n", rc);
     String payload = client.getString();
     if (payload.length() > 0) {
       Serial.print("Weather payload begin: ");
       Serial.println(payload.substring(0, min((size_t)200, payload.length())));
     }
-    client.end();
     return false;
   }
 
   String payload = client.getString();
   client.end();
+  logNetworkResponse("WEATHER", rc, payload.length());
   DynamicJsonDocument doc(12288);
   DeserializationError error = deserializeJson(doc, payload);
   if (error) {
@@ -587,20 +629,23 @@ bool fetchWeatherForecast() {
 bool fetchNewsFeed(const char* url, NewsItem* items, int &count, unsigned long &lastFetchMs) {
   debugLog("fetchNewsFeed starting for:", url);
   lastFetchMs = millis();
+  logNetworkRequest("NEWS", url);
   HTTPClient client;
   client.begin(url);
   client.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  client.setTimeout(10000); 
+  client.setTimeout(15000);
 
   int rc = client.GET();
   if (rc != 200) {
-    Serial.printf("fetchNewsFeed HTTP failed: %d\n", rc);
     client.end();
+    logNetworkResponse("NEWS", rc, 0);
+    Serial.printf("fetchNewsFeed HTTP failed: %d\n", rc);
     return false;
   }
 
   String payload = client.getString();
   client.end();
+  logNetworkResponse("NEWS", rc, payload.length());
   
   if (payload.length() == 0) {
     debugLog("fetchNewsFeed: Received empty payload");
@@ -645,6 +690,186 @@ bool fetchNewsFeed(const char* url, NewsItem* items, int &count, unsigned long &
   }
   debugLog("fetchNewsFeed items parsed:", count);
   return count > 0;
+}
+
+bool fetchStocks() {
+  debugLog("fetchStocks: starting");
+  lastStockFetchMs = millis();
+  
+  // Define the stocks to fetch (symbol, display name)
+  // Note: OMXHPI index needs ^ prefix, Mandatum uses MANTA.HE, Nordea uses NDA-SE.ST
+  const char* stockSymbols[] = {
+    "ELISA.HE",    // Elisa
+    "GOFORE.HE",   // Gofore
+    "KESKOB.HE",   // Kesko B
+    "MANTA.HE",    // Mandatum
+    "NDA-SE.ST",   // Nordea Bank (Stockholm listing)
+    "SAMPO.HE",    // Sampo A
+    "TIETO.HE",    // Tieto
+    "^OMXHPI"      // OMX Helsinki index (needs ^ prefix)
+  };
+  const char* stockNames[] = {
+    "Elisa",
+    "Gofore",
+    "Kesko B",
+    "Mandatum",
+    "Nordea",
+    "Sampo A",
+    "Tieto",
+    "OMXHPI"
+  };
+  
+  bool anySuccess = false;
+  stockCount = 0;
+  
+  for (int i = 0; i < MAX_STOCKS; ++i) {
+    // Check if we're rate limited
+    if (millis() < stockRateLimitUntilMs) {
+      debugLog("Stock fetch rate limited, skipping remaining stocks");
+      break;
+    }
+    
+    String url = "https://query1.finance.yahoo.com/v8/finance/chart/" + String(stockSymbols[i]);
+    url += "?interval=1d&range=1d";
+    
+    logNetworkRequest("STOCK", url.c_str());
+    
+    HTTPClient client;
+    client.begin(url);
+    client.setTimeout(15000);
+    client.addHeader("User-Agent", "Mozilla/5.0");
+    
+    int rc = client.GET();
+    String payload;
+    
+    if (rc == 200) {
+      payload = client.getString();
+      logNetworkResponse("STOCK", rc, payload.length());
+      
+      // Parse the JSON response
+      DynamicJsonDocument doc(8192);
+      DeserializationError error = deserializeJson(doc, payload);
+      
+      // Check if the API returned an actual error in the JSON (not just null)
+      if (!error && doc.containsKey("chart") && doc["chart"].containsKey("error")) {
+        JsonVariant errorVal = doc["chart"]["error"];
+        if (!errorVal.isNull() && errorVal.as<String>().length() > 0) {
+          String apiError = errorVal.as<String>();
+          debugLog("Yahoo API error for:", stockSymbols[i]);
+          debugLog("  API Error:", apiError.c_str());
+          client.end();
+          continue;
+        }
+      }
+      
+      if (!error) {
+        // Check if we have chart.result[0].meta
+      if (doc.containsKey("chart") && doc["chart"].containsKey("result")) {
+        JsonArray results = doc["chart"]["result"];
+        if (results.size() == 0) {
+          debugLog("Empty result array for:", stockSymbols[i]);
+          debugLog("  Payload start:", payload.substring(0, min((size_t)200, payload.length())).c_str());
+          client.end();
+          continue;
+        }
+        if (!results[0].containsKey("meta")) {
+          debugLog("Missing meta in result[0] for:", stockSymbols[i]);
+          debugLog("  Payload start:", payload.substring(0, min((size_t)200, payload.length())).c_str());
+          client.end();
+          continue;
+        }
+        JsonObject meta = results[0]["meta"];
+        
+        // Extract timestamp from API - try regularMarketTime first, then timestamp array
+        if (lastStockMarketTimestamp == 0) {
+          if (meta.containsKey("regularMarketTime")) {
+            lastStockMarketTimestamp = meta["regularMarketTime"] | 0;
+          } else if (doc["chart"].containsKey("timestamp") && doc["chart"]["timestamp"].size() > 0) {
+            lastStockMarketTimestamp = doc["chart"]["timestamp"][0] | 0;
+          }
+        }
+          
+          // Try multiple possible field names for price
+          float price = 0.0f;
+          float previousClose = 0.0f;
+          
+          // Try regularMarketPrice first, then currentPrice, then lastPrice
+          if (meta.containsKey("regularMarketPrice")) {
+            price = meta["regularMarketPrice"] | 0.0f;
+          } else if (meta.containsKey("currentPrice")) {
+            price = meta["currentPrice"] | 0.0f;
+          } else if (meta.containsKey("lastPrice")) {
+            price = meta["lastPrice"] | 0.0f;
+          }
+          
+          // Try previousClose first, then regularMarketPreviousClose, then previousCloseRaw
+          if (meta.containsKey("previousClose")) {
+            previousClose = meta["previousClose"] | 0.0f;
+          } else if (meta.containsKey("regularMarketPreviousClose")) {
+            previousClose = meta["regularMarketPreviousClose"] | 0.0f;
+          } else if (meta.containsKey("chartPreviousClose")) {
+            previousClose = meta["chartPreviousClose"] | 0.0f;
+          } else if (meta.containsKey("open")) {
+            // Use open price as fallback if previousClose not available
+            previousClose = meta["open"] | 0.0f;
+          }
+          
+          if (price > 0 && previousClose > 0) {
+            stocks[stockCount].symbol = stockSymbols[i];
+            stocks[stockCount].name = stockNames[i];
+            stocks[stockCount].price = price;
+            stocks[stockCount].change = price - previousClose;
+            stocks[stockCount].changePercent = ((price - previousClose) / previousClose) * 100.0f;
+            stocks[stockCount].fetched = true;
+            stockCount++;
+            anySuccess = true;
+            debugLog("Stock fetched:", stockNames[i]);
+            debugLog("  Price:", price);
+            debugLog("  Change:", stocks[stockCount-1].change);
+            debugLog("  Change%:", stocks[stockCount-1].changePercent);
+          } else {
+            debugLog("Invalid or missing price data for:", stockSymbols[i]);
+            debugLog("  Price:", price);
+            debugLog("  PreviousClose:", previousClose);
+          }
+        } else {
+          debugLog("Missing chart.result[0].meta in response for:", stockSymbols[i]);
+          // Print first 200 chars of payload for debugging
+          if (payload.length() > 0) {
+            debugLog("  Payload start:", payload.substring(0, min((size_t)200, payload.length())).c_str());
+          }
+        }
+      } else {
+        debugLog("JSON parse failed for:", stockSymbols[i]);
+        debugLog("  Error:", error.c_str());
+      }
+    } else {
+      logNetworkResponse("STOCK", rc, 0);
+      debugLog("HTTP failed for:", stockSymbols[i]);
+      debugLog("  Code:", rc);
+      
+      // Handle rate limiting (403 Forbidden)
+      if (rc == 403) {
+        debugLog("Rate limited by Yahoo Finance, pausing stock fetches for 1 hour");
+        stockRateLimitUntilMs = millis() + STOCK_RATE_LIMIT_MS;
+        break;  // Stop fetching more stocks
+      }
+      // Handle 429 Too Many Requests
+      if (rc == 429) {
+        debugLog("Too many requests, pausing stock fetches for 1 hour");
+        stockRateLimitUntilMs = millis() + STOCK_RATE_LIMIT_MS;
+        break;
+      }
+    }
+    client.end();
+    
+    // Rate limiting between requests: 200ms delay between each stock
+    delay(200);
+  }
+  
+  debugLog("fetchStocks: fetched");
+  debugLog("  Count:", stockCount);
+  return anySuccess;
 }
 
 void drawHeader(const String &subtitle) {
@@ -1278,6 +1503,94 @@ void drawKeskiSuomiNewsScreen() {
   drawNewsScreenList("Yle News: Keski-Suomi - Latest", newsItemsKeskiSuomi, newsCountKeskiSuomi);
 }
 
+void drawStocksScreen() {
+  tft.fillScreen(TFT_BLACK);
+  
+  // Build header with date from API and OMXHPI change
+  String subtitle = "Helsinki Stock Exchange";
+  if (lastStockMarketTimestamp != 0) {
+    time_t marketTime = lastStockMarketTimestamp;
+    tm timeInfo;
+    localtime_r(&marketTime, &timeInfo);
+    char dateBuf[20];
+    strftime(dateBuf, sizeof(dateBuf), " - %a, %b %d", &timeInfo);
+    subtitle += dateBuf;
+  }
+  
+  // Find OMXHPI and add its change to header
+  for (int i = 0; i < stockCount; ++i) {
+    if (stocks[i].symbol == "^OMXHPI" && stocks[i].changePercent != 0) {
+      char omxBuf[16];
+      snprintf(omxBuf, sizeof(omxBuf), " | OMXHPI %+.1f%%", stocks[i].changePercent);
+      subtitle += omxBuf;
+      break;
+    }
+  }
+  
+  drawHeader(subtitle);
+  FastLED.clear(true);
+
+  int y = 28;
+  tft.setTextSize(1);
+  
+  if (stockCount <= 0) {
+    tft.setTextColor(TFT_YELLOW);
+    tft.setTextSize(2);
+    tft.setCursor(4, 70);
+    tft.print("No stock data available");
+    tft.setTextSize(1);
+    tft.setCursor(4, 90);
+    tft.print("(0/" + String(MAX_STOCKS) + " fetched)");
+    drawFooter("Press B to refresh.", "Left/Right for screens.");
+    return;
+  }
+
+  for (int i = 0; i < stockCount; ++i) {
+    StockItem &stock = stocks[i];
+    
+    // Skip OMXHPI since it's shown in the header
+    if (stock.symbol == "^OMXHPI") {
+      continue;
+    }
+    
+    // Print symbol and name
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(4, y);
+    tft.print(stock.symbol);
+    tft.print(" ");
+    tft.print(stock.name);
+    
+    // Print price, change, and change%
+    int priceX = 140;
+    tft.setCursor(priceX, y);
+    tft.printf("%.2f EUR", stock.price);
+    
+    int changeX = 200;
+    // Color based on change
+    uint16_t changeColor = (stock.change >= 0) ? TFT_GREEN : TFT_RED;
+    tft.setTextColor(changeColor);
+    tft.setCursor(changeX, y);
+    tft.printf("%+.2f", stock.change);
+    
+    tft.setCursor(260, y);
+    tft.printf("%+.1f%%", stock.changePercent);
+    
+    y += 18;
+    if (y > 140) break;  // Stop if we run out of screen space
+  }
+  
+  // Count how many stocks were displayed (excluding OMXHPI which is in header)
+  int displayedCount = stockCount;
+  for (int i = 0; i < stockCount; ++i) {
+    if (stocks[i].symbol == "^OMXHPI") {
+      displayedCount--;
+      break;
+    }
+  }
+  String footerMsg = String(displayedCount) + " of " + String(MAX_STOCKS) + " stocks";
+  drawFooter("B to refresh.", footerMsg);
+}
+
 void drawCurrentScreen() {
   if (activeScreen == SCREEN_PRICE_TODAY || activeScreen == SCREEN_PRICE_TOMORROW) {
     drawMainScreen();
@@ -1291,6 +1604,8 @@ void drawCurrentScreen() {
     drawKotimaaNewsScreen();
   } else if (activeScreen == SCREEN_NEWS_KESKI_SUOMI) {
     drawKeskiSuomiNewsScreen();
+  } else if (activeScreen == SCREEN_STOCKS) {
+    drawStocksScreen();
   }
 }
 
@@ -1445,6 +1760,10 @@ void setup() {
     fetchWeatherForecast();
     fetchKotimaaNews(); // Existing news fetch
     fetchKeskiSuomiNews(); // New news fetch
+    // Only fetch stocks if not rate limited (shouldn't be at startup)
+    if (millis() >= stockRateLimitUntilMs) {
+      fetchStocks(); // Stock market data
+    }
   } else {
     debugLog("WiFi connection failed.");
     if (!hadCache) {
@@ -1605,6 +1924,12 @@ void loop() {
       fetchWeatherForecast();
       fetchKotimaaNews();
       fetchKeskiSuomiNews();
+      // Only fetch stocks if not rate limited
+      if (millis() >= stockRateLimitUntilMs) {
+        fetchStocks();
+      } else {
+        debugLog("Stock refresh skipped: rate limited");
+      }
       drawCurrentScreen();
     } else {
       tft.fillRect(0, 90, 320, 30, TFT_BLACK);
@@ -1656,6 +1981,14 @@ void loop() {
   if (now - lastNewsKeskiSuomiFetchMs > 60UL * 60UL * 1000UL) { // New Keski-Suomi news refresh
     if (WiFi.status() == WL_CONNECTED && fetchKeskiSuomiNews() && !powerSaveActive &&
         activeScreen == SCREEN_NEWS_KESKI_SUOMI) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - lastStockFetchMs > STOCK_FETCH_INTERVAL_MS && millis() >= stockRateLimitUntilMs) {
+    if (WiFi.status() == WL_CONNECTED && !powerSaveActive &&
+        activeScreen == SCREEN_STOCKS) {
+      fetchStocks();
       drawCurrentScreen();
     }
   }

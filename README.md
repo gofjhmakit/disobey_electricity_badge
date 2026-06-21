@@ -60,11 +60,18 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 
 ## TODO
 
-1. Alternate screen for RSS News reader for Yle Kotimaa news
-    - https://yle.fi/rss/t/18-34837/fi)
-2. Show latest title from head news in the current blue top area
-    - https://yle.fi/rss/uutiset/paauutiset
-3. Add a setting to Enable/Disable RSS news
+1. [x] Alternate screen for RSS News reader for Yle Kotimaa news
+2. Add VR Jyväskylä Station schedule for arriving and leaving trains (clearly indicated whether leaving or arriving) 
+2.1 This is difficult due to digitraffic api using gzip. 
+3. Flight Radar centered for Muurame (small map of muurame borders, and locations of planes on map)
 4. [x] Weather Forecast for today and tomorrow with nice visuals
 5. [x] Even in the battery saving mode, it should every hour at X:00 update the two leds, without turning the screen or other leds on.
-5.1 BUG: Currently the leds go like "3,4,5,2,1  -> 6,7,8,9,10 -> 3,4,5,2,1 ->" Where the numbers are the leds from users perspective, 1-5 are on left side of screen, 6-10 on the right. It should go 1->5, and 6->10, and both 1->5 and 6->10 can go at the same time. 
+6. [x] Stock info for certain stocks (Price, day change%, day change eur). Here example stocks are (for no particular reason):
+  - Elisa
+  - Gofore
+  - Kesko B
+  - Mandatum
+  - Nordea Bank
+  - Sampo A
+  - Tieto
+  - OMXHPI
