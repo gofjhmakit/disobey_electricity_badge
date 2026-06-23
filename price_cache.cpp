@@ -4,7 +4,7 @@
 #include "debug_log.h"
 #include "time_utils.h"
 
-#include <LittleFS.h>
+#include <FFat.h>
 #include <ArduinoJson.h>
 #include <math.h>
 
@@ -23,7 +23,7 @@ bool saveCache() {
     item["price"] = g_app.cacheItems[i].price;
   }
 
-  fs::File file = LittleFS.open(CACHE_FILE, FILE_WRITE);
+  fs::File file = FFat.open(CACHE_FILE, FILE_WRITE);
   if (!file) {
     debugLog("Failed to open cache file for write");
     return false;
@@ -36,11 +36,11 @@ bool saveCache() {
 
 bool loadCache() {
   debugLog("Checking for cached price data...");
-  if (!LittleFS.exists(CACHE_FILE)) {
+  if (!FFat.exists(CACHE_FILE)) {
     debugLog("Cache file not found.");
     return false;
   }
-  fs::File file = LittleFS.open(CACHE_FILE, FILE_READ);
+  fs::File file = FFat.open(CACHE_FILE, FILE_READ);
   if (!file) {
     debugLog("Failed to open cache file.");
     return false;

@@ -3,7 +3,7 @@
 #include "config.h"
 #include "debug_log.h"
 
-#include <LittleFS.h>
+#include <FFat.h>
 #include <ArduinoJson.h>
 
 void loadDefaults() {
@@ -17,13 +17,13 @@ void loadDefaults() {
 
 bool loadSettings() {
   debugLog("Checking for settings file...");
-  if (!LittleFS.exists(SETTINGS_FILE)) {
+  if (!FFat.exists(SETTINGS_FILE)) {
     debugLog("Settings file not found, loading defaults.");
     loadDefaults();
     return false;
   }
 
-  fs::File file = LittleFS.open(SETTINGS_FILE, FILE_READ);
+  fs::File file = FFat.open(SETTINGS_FILE, FILE_READ);
   if (!file) {
     debugLog("Failed to open settings file, loading defaults.");
     loadDefaults();
@@ -62,7 +62,7 @@ void saveSettings() {
   doc["thresholdModerate"] = g_app.settings.thresholdModerate;
   doc["ledBrightness"] = g_app.settings.ledBrightness;
 
-  fs::File file = LittleFS.open(SETTINGS_FILE, FILE_WRITE);
+  fs::File file = FFat.open(SETTINGS_FILE, FILE_WRITE);
   if (!file) {
     debugLog("Failed to write settings file");
     return;

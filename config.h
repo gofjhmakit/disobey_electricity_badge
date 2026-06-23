@@ -17,7 +17,7 @@
 #define BTN_START  12
 #define BTN_SELECT 45
 
-// LittleFS paths
+// FFat paths
 #define CACHE_FILE    "/price_cache.json"
 #define SETTINGS_FILE "/badge_settings.json"
 

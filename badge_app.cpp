@@ -16,7 +16,7 @@
 #include "weather_client.h"
 #include "wifi_manager.h"
 
-#include <LittleFS.h>
+#include <FFat.h>
 #include <WiFi.h>
 
 void badgeAppSetup() {
@@ -39,11 +39,11 @@ void badgeAppSetup() {
   Serial.flush();
   delay(100);
 
-  Serial.println("Initializing LittleFS...");
-  if (!LittleFS.begin()) {
-    Serial.println("LittleFS mount failed");
+  Serial.println("Initializing FFat...");
+  if (!FFat.begin(false)) {
+    Serial.println("FFat mount failed");
   } else {
-    Serial.println("LittleFS mounted");
+    Serial.println("FFat mounted");
   }
 
   initAppButtons();

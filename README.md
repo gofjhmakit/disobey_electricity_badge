@@ -14,7 +14,7 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 - Full-day price bar chart and current price display
 - Color-coded thresholds and LED ring status
 - Settings screen for cheap/moderate thresholds and LED brightness
-- Local cache using LittleFS for offline fallback
+- Local cache using FFat (FATFS) for offline fallback
 - Jyväskylä station train screen from Digitraffic (next 6 arrivals/departures, color-coded red/green)
 - Calendar screen with Finland public holidays, ISO week numbers, and upcoming holiday list
 - Rain-now screen (next 60 min hourly precipitation from Open-Meteo)
@@ -44,7 +44,7 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 - `ArduinoJson`
 - `LovyanGFX`
 - `FastLED`
-- `LittleFS`
+- `FFat`
 
 ## Build
 
@@ -60,8 +60,8 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 ### Arduino CLI
 
 ```bash
-arduino-cli compile --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB"
-arduino-cli upload -p /dev/cu.usbserial-xxxxx --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB"
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB,FlashSize=16M,PSRAM=opi"
+arduino-cli upload -p /dev/cu.usbserial-xxxxx --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB,FlashSize=16M,PSRAM=opi"
 ```
 
 Without the 3MB partition scheme, the sketch will not fit (it uses ~1.56MB, exceeding the default 1.2MB limit).
