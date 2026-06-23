@@ -11,6 +11,9 @@ bool connectWiFi() {
   }
   debugLog("Starting WiFi connection...");
   debugLog("SSID:", g_app.settings.ssid.c_str());
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);  // Keep PHY active to avoid repeated init/teardown under HTTPS bursts.
   WiFi.mode(WIFI_STA);
   WiFi.begin(g_app.settings.ssid.c_str(), g_app.settings.password.c_str());
   unsigned long deadline = millis() + 12000;

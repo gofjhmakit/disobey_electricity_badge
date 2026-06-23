@@ -15,7 +15,11 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 - Color-coded thresholds and LED ring status
 - Settings screen for cheap/moderate thresholds and LED brightness
 - Local cache using LittleFS for offline fallback
-- Jyväskylä station train screen from Digitraffic (next 6 arrivals/departures)
+- Jyväskylä station train screen from Digitraffic (next 6 arrivals/departures, color-coded red/green)
+- Calendar screen with Finland public holidays, ISO week numbers, and upcoming holiday list
+- Rain-now screen (next 60 min hourly precipitation from Open-Meteo)
+- Air quality screen (AQI, PM2.5, PM10, NO2, O3 from Open-Meteo with color-coded air quality)
+- System health screen (WiFi signal strength, free heap, uptime, last data sync time)
 
 ## Hardware
 
@@ -44,11 +48,23 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 
 ## Build
 
-1. Open the `NordpoolPriceBadge` sketch in the Arduino IDE or PlatformIO.
-2. Select an ESP32 board.
-3. ![Settings](arduino_settings.png)
-4. Install the listed libraries if needed.
-5. Upload and monitor serial output at 115200.
+**IMPORTANT:** Build requires the **3MB APP partition scheme** to fit all features. 
+
+### Arduino IDE (VS Code)
+
+1. Select **ESP32-S3** board
+2. Go to Tools → Board → Board Settings → Partition Scheme
+3. Select **16M Flash (3MB APP/9.9MB FATFS)** ← **Required!**
+4. Upload normally
+
+### Arduino CLI
+
+```bash
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB"
+arduino-cli upload -p /dev/cu.usbserial-xxxxx --fqbn "esp32:esp32:esp32s3:PartitionScheme=app3M_fat9M_16MB"
+```
+
+Without the 3MB partition scheme, the sketch will not fit (it uses ~1.56MB, exceeding the default 1.2MB limit).
 
 ## Notes
 
@@ -76,8 +92,8 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
   - Sampo A
   - Tieto
   - OMXHPI
-7. Calendar screen (today + next event from Google/ICS export feed)
-8. Rain-now screen (simple "rain next 60 min" from FMI/Open-Meteo endpoints)
-9. Air quality + pollen screen (single number + color code)
-10. Battery/uptime/system health screen (Wi-Fi RSSI, free heap, uptime, last sync)
+7. [x] Calendar screen (Finland public holidays: today + next)
+8. [x] Rain-now screen (simple "rain next 60 min" from Open-Meteo)
+9. [x] Air quality + pollen screen (AQI, PM2.5, PM10, NO2, O3 from Open-Meteo)
+10. [x] Battery/uptime/system health screen (Wi-Fi RSSI, free heap, uptime, last sync)
 11. On-this-day trivia screen (daily fact feed)

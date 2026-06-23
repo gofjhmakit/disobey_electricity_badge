@@ -28,18 +28,23 @@
 #define MAX_NEWS_ITEMS   5
 #define MAX_STOCKS       8
 #define MAX_TRAINS       6
+#define MAX_HOLIDAYS     20
+#define MAX_RAIN_SLOTS   12
 
 // Screen IDs
-#define SCREEN_PRICE_TODAY      0
-#define SCREEN_PRICE_TOMORROW   1
-#define SCREEN_WEATHER_TODAY    2
-#define SCREEN_WEATHER_TOMORROW 3
-#define SCREEN_WEATHER_WEEK     4
-#define SCREEN_NEWS_KOTIMAA     5
-#define SCREEN_NEWS_KESKI_SUOMI 6
-#define SCREEN_STOCKS           7
-#define SCREEN_TRAINS           8
-#define SCREEN_COUNT            9
+#define SCREEN_PRICE_TODAY        0
+#define SCREEN_PRICE_TOMORROW     1
+#define SCREEN_WEATHER_TODAY      2
+#define SCREEN_WEATHER_TOMORROW   3
+#define SCREEN_WEATHER_WEEK       4
+#define SCREEN_NEWS_KOTIMAA       5
+#define SCREEN_NEWS_KESKI_SUOMI   6
+#define SCREEN_STOCKS             7
+#define SCREEN_TRAINS             8
+#define SCREEN_CALENDAR           9
+#define SCREEN_SYSTEM_HEALTH      10
+#define SCREEN_RAIN_AIR_QUALITY   11
+#define SCREEN_COUNT              12
 
 // Weather categories (for LED animations)
 #define WEATHER_CLEAR   0
@@ -53,6 +58,8 @@
 #define STOCK_FETCH_INTERVAL_MS (60UL * 60UL * 1000UL)
 #define STOCK_RATE_LIMIT_MS     (60UL * 60UL * 1000UL)
 #define TRAIN_FETCH_INTERVAL_MS (30UL * 60UL * 1000UL)
+#define HOLIDAY_FETCH_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL)
+#define RAIN_AIR_FETCH_INTERVAL_MS (30UL * 60UL * 1000UL)
 
 // Power save
 #define POWER_SAVE_TIMEOUT_MS       (10UL * 60UL * 1000UL)

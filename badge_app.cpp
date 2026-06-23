@@ -89,13 +89,14 @@ void badgeAppSetup() {
     } else {
       debugLog("Tomorrow prices already cached or fetch throttled.");
     }
+    // Fetch trains first while heap is least fragmented.
+    fetchTrains();
     fetchWeatherForecast();
     fetchKotimaaNews();
     fetchKeskiSuomiNews();
     if (millis() >= g_app.stockRateLimitUntilMs) {
       fetchStocks();
     }
-    fetchTrains();
   } else {
     debugLog("WiFi connection failed.");
     if (!hadCache) {
@@ -208,6 +209,7 @@ void badgeAppLoop() {
       } else {
         debugLog("Refresh skipped: data already current or fetch throttled.");
       }
+      fetchTrains();
       fetchWeatherForecast();
       fetchKotimaaNews();
       fetchKeskiSuomiNews();
@@ -216,7 +218,6 @@ void badgeAppLoop() {
       } else {
         debugLog("Stock refresh skipped: rate limited");
       }
-      fetchTrains();
       drawCurrentScreen();
     } else {
       drawRefreshError();

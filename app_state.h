@@ -37,6 +37,17 @@ struct AppState {
   TrainItem trains[MAX_TRAINS];
   int trainCount = 0;
   unsigned long lastTrainFetchMs = 0;
+  
+  HolidayItem holidays[MAX_HOLIDAYS];
+  int holidayCount = 0;
+  unsigned long lastHolidayFetchMs = 0;
+  time_t lastDataSyncEpoch = 0;
+  
+  RainSlot rainNext60m[MAX_RAIN_SLOTS];
+  int rainCount = 0;
+  unsigned long lastRainAirFetchMs = 0;
+  
+  AirQualityData airQuality = {};
 
   ButtonState buttons[10];
 

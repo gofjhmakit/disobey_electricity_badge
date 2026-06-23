@@ -44,6 +44,24 @@ struct TrainItem {
   bool cancelled;
 };
 
+struct HolidayItem {
+  char date[11];
+  char localName[40];
+};
+
+struct RainSlot {
+  float precipitationMm;
+  float probabilityPercent;
+};
+
+struct AirQualityData {
+  int aqiUS;
+  float pm25;
+  float pm10;
+  int no2;
+  int o3;
+};
+
 struct BadgeSettings {
   String ssid;
   String password;

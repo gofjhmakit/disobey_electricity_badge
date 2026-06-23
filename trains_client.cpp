@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <new>
 #include <vector>
 
 #include <miniz.h>
@@ -40,6 +41,19 @@ struct TrainCandidate {
 static bool fetchRawGzipResponse(int &statusCode, bool &isGzip, std::vector<uint8_t> &body);
 static bool gunzipToBuffer(const uint8_t *compressed, size_t compressedLen, std::vector<uint8_t> &out);
 static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem *outItems, int &outCount);
+
+static bool ensureCapacity(std::vector<uint8_t> &buf, size_t capacity, const char *name) {
+  if (buf.capacity() >= capacity) {
+    return true;
+  }
+  try {
+    buf.reserve(capacity);
+    return true;
+  } catch (const std::bad_alloc &) {
+    debugLog(name, "reserve OOM");
+    return false;
+  }
+}
 
 static uint32_t readLe32(const uint8_t *src) {
   return (uint32_t)src[0] |
@@ -504,60 +518,70 @@ bool fetchTrains() {
   g_app.lastTrainFetchMs = millis();
   logNetworkRequest("TRAIN", kDigitrafficUrl);
 
-  int rc = -1;
-  bool isGzip = false;
-  static std::vector<uint8_t> body;
-  static std::vector<uint8_t> inflated;
-  body.clear();
-  inflated.clear();
-  body.reserve(96 * 1024);
-  inflated.reserve(192 * 1024);
-
-  if (!fetchRawGzipResponse(rc, isGzip, body)) {
-    logNetworkResponse("TRAIN", rc, 0);
-    debugLog("fetchTrains: request failed");
-    return false;
-  }
-  if (rc != 200) {
-    logNetworkResponse("TRAIN", rc, body.size());
-    return false;
-  }
-  if (body.empty()) {
-    logNetworkResponse("TRAIN", rc, 0);
-    debugLog("fetchTrains: empty body");
-    return false;
-  }
-
-  const char *payloadData = nullptr;
-  size_t payloadLen = 0;
-  if (isGzip) {
-    if (!gunzipToBuffer(body.data(), body.size(), inflated)) {
-      logNetworkResponse("TRAIN", rc, 0);
-      debugLog("fetchTrains: gzip decode failed");
+  try {
+    int rc = -1;
+    bool isGzip = false;
+    static std::vector<uint8_t> body;
+    static std::vector<uint8_t> inflated;
+    body.clear();
+    inflated.clear();
+    // Keep trains allocations bounded; previous 96/192KB reserve could throw and abort.
+    if (!ensureCapacity(body, 48 * 1024, "TRAIN body")) {
       return false;
     }
-    payloadData = reinterpret_cast<const char *>(inflated.data());
-    payloadLen = inflated.size();
-  } else {
-    payloadData = reinterpret_cast<const char *>(body.data());
-    payloadLen = body.size();
-  }
+    if (!ensureCapacity(inflated, 96 * 1024, "TRAIN inflated")) {
+      return false;
+    }
 
-  TrainItem fetchedTrains[MAX_TRAINS];
-  int fetchedCount = 0;
-  if (!parseTrainPayload(payloadData, payloadLen, fetchedTrains, fetchedCount)) {
+    if (!fetchRawGzipResponse(rc, isGzip, body)) {
+      logNetworkResponse("TRAIN", rc, 0);
+      debugLog("fetchTrains: request failed");
+      return false;
+    }
+    if (rc != 200) {
+      logNetworkResponse("TRAIN", rc, body.size());
+      return false;
+    }
+    if (body.empty()) {
+      logNetworkResponse("TRAIN", rc, 0);
+      debugLog("fetchTrains: empty body");
+      return false;
+    }
+
+    const char *payloadData = nullptr;
+    size_t payloadLen = 0;
+    if (isGzip) {
+      if (!gunzipToBuffer(body.data(), body.size(), inflated)) {
+        logNetworkResponse("TRAIN", rc, 0);
+        debugLog("fetchTrains: gzip decode failed");
+        return false;
+      }
+      payloadData = reinterpret_cast<const char *>(inflated.data());
+      payloadLen = inflated.size();
+    } else {
+      payloadData = reinterpret_cast<const char *>(body.data());
+      payloadLen = body.size();
+    }
+
+    TrainItem fetchedTrains[MAX_TRAINS];
+    int fetchedCount = 0;
+    if (!parseTrainPayload(payloadData, payloadLen, fetchedTrains, fetchedCount)) {
+      logNetworkResponse("TRAIN", rc, payloadLen);
+      debugLog("fetchTrains: parse failed");
+      return false;
+    }
+
     logNetworkResponse("TRAIN", rc, payloadLen);
-    debugLog("fetchTrains: parse failed");
+    g_app.trainCount = 0;
+    for (int i = 0; i < fetchedCount && i < MAX_TRAINS; ++i) {
+      g_app.trains[g_app.trainCount] = fetchedTrains[i];
+      g_app.trainCount++;
+    }
+
+    debugLog("fetchTrains parsed:", g_app.trainCount);
+    return g_app.trainCount > 0;
+  } catch (const std::bad_alloc &) {
+    debugLog("fetchTrains: OOM");
     return false;
   }
-
-  logNetworkResponse("TRAIN", rc, payloadLen);
-  g_app.trainCount = 0;
-  for (int i = 0; i < fetchedCount && i < MAX_TRAINS; ++i) {
-    g_app.trains[g_app.trainCount] = fetchedTrains[i];
-    g_app.trainCount++;
-  }
-
-  debugLog("fetchTrains parsed:", g_app.trainCount);
-  return g_app.trainCount > 0;
 }

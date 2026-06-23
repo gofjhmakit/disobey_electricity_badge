@@ -9,6 +9,8 @@
 #include <LovyanGFX.hpp>
 #include <math.h>
 #include <time.h>
+#include <WiFi.h>
+#include <Esp.h>
 
 void initDisplay() {
   pinMode(TFT_BL, OUTPUT);
@@ -521,6 +523,250 @@ void drawTrainsScreen() {
   drawFooter("Green=arrival, red=departure", "End=terminal station code");
 }
 
+static String formatUptime(unsigned long ms) {
+  unsigned long seconds = ms / 1000UL;
+  unsigned long days = seconds / 86400UL;
+  seconds %= 86400UL;
+  unsigned long hours = seconds / 3600UL;
+  seconds %= 3600UL;
+  unsigned long minutes = seconds / 60UL;
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%lud %02lu:%02lu", days, hours, minutes);
+  return String(buf);
+}
+
+static String todayIsoDate() {
+  time_t now = time(nullptr);
+  if (now <= 0) {
+    return "";
+  }
+  tm localNow;
+  localtime_r(&now, &localNow);
+  char buf[11];
+  strftime(buf, sizeof(buf), "%Y-%m-%d", &localNow);
+  return String(buf);
+}
+
+static bool isLeapYear(int year) {
+  return ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
+}
+
+static int daysInMonth(int year, int month) {
+  static const int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month == 2) {
+    return isLeapYear(year) ? 29 : 28;
+  }
+  return kDays[month - 1];
+}
+
+static int isoWeekNumber(time_t epoch) {
+  tm localTm;
+  localtime_r(&epoch, &localTm);
+  char weekBuf[4];
+  strftime(weekBuf, sizeof(weekBuf), "%V", &localTm);
+  return atoi(weekBuf);
+}
+
+static bool hasHolidayOnDate(const char *isoDate) {
+  for (int i = 0; i < g_app.holidayCount; ++i) {
+    if (strcmp(g_app.holidays[i].date, isoDate) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int nextHolidayIndex(const String &today) {
+  for (int i = 0; i < g_app.holidayCount; ++i) {
+    if (today.length() == 0 || String(g_app.holidays[i].date) >= today) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static String formatEpoch(time_t epoch) {
+  if (epoch <= 0) {
+    return "never";
+  }
+  tm localTime;
+  localtime_r(&epoch, &localTime);
+  char buf[24];
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &localTime);
+  return String(buf);
+}
+
+void drawCalendarScreen() {
+  g_app.tft.fillScreen(TFT_BLACK);
+  drawHeader("Calendar + Finland holidays");
+  FastLED.clear(true);
+
+  time_t now = time(nullptr);
+  if (now <= 0) {
+    g_app.tft.setTextColor(TFT_YELLOW);
+    g_app.tft.setTextSize(2);
+    g_app.tft.setCursor(4, 70);
+    g_app.tft.print("No local time.");
+    drawFooter("NTP time required", "Press B to refresh.");
+    return;
+  }
+  tm todayTm;
+  localtime_r(&now, &todayTm);
+  const int year = todayTm.tm_year + 1900;
+  const int month = todayTm.tm_mon + 1;
+  const int todayDay = todayTm.tm_mday;
+  const int monthDays = daysInMonth(year, month);
+
+  tm firstTm = {};
+  firstTm.tm_year = year - 1900;
+  firstTm.tm_mon = month - 1;
+  firstTm.tm_mday = 1;
+  firstTm.tm_hour = 12;
+  time_t firstEpoch = mktime(&firstTm);
+  localtime_r(&firstEpoch, &firstTm);
+  const int firstWeekdayMon = (firstTm.tm_wday + 6) % 7;  // Monday=0
+
+  const int calX = 2;
+  const int calY = 26;
+  const int weekW = 18;
+  const int dayW = 28;
+  const int rowH = 16;
+  const int panelX = 220;
+
+  char monthLabel[22];
+  strftime(monthLabel, sizeof(monthLabel), "%B %Y", &todayTm);
+  g_app.tft.setTextSize(1);
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setCursor(calX + weekW, calY);
+  g_app.tft.print(monthLabel);
+
+  g_app.tft.setTextColor(TFT_LIGHTGREY);
+  g_app.tft.setCursor(calX, calY + 12);
+  g_app.tft.print("Wk");
+  const char *dayNames[7] = {"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"};
+  for (int col = 0; col < 7; ++col) {
+    g_app.tft.setCursor(calX + weekW + col * dayW + 6, calY + 12);
+    g_app.tft.print(dayNames[col]);
+  }
+
+  g_app.tft.drawFastVLine(panelX - 4, calY, 122, 0x4208);
+
+  for (int row = 0; row < 6; ++row) {
+    int mondayOffset = row * 7 - firstWeekdayMon;
+    time_t weekEpoch = firstEpoch + (time_t)mondayOffset * 86400;
+    int weekNum = isoWeekNumber(weekEpoch);
+    int y = calY + 26 + row * rowH;
+
+    g_app.tft.setTextColor(TFT_LIGHTGREY);
+    g_app.tft.setCursor(calX, y);
+    g_app.tft.printf("%02d", weekNum);
+
+    for (int col = 0; col < 7; ++col) {
+      int day = row * 7 + col - firstWeekdayMon + 1;
+      if (day < 1 || day > monthDays) {
+        continue;
+      }
+      char isoDate[11];
+      snprintf(isoDate, sizeof(isoDate), "%04d-%02d-%02d", year, month, day);
+      bool isToday = day == todayDay;
+      bool isHoliday = hasHolidayOnDate(isoDate);
+
+      int x = calX + weekW + col * dayW + 6;
+      if (isHoliday) {
+        g_app.tft.setTextColor(TFT_CYAN);
+      } else {
+        g_app.tft.setTextColor(TFT_WHITE);
+      }
+      g_app.tft.setCursor(x, y);
+      g_app.tft.printf("%2d", day);
+
+      if (isToday) {
+        g_app.tft.drawRect(x - 2, y - 1, 16, 11, TFT_YELLOW);
+      }
+    }
+  }
+
+  const String today = todayIsoDate();
+  int nextIndex = nextHolidayIndex(today);
+  g_app.tft.setTextSize(1);
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setCursor(panelX, calY);
+  g_app.tft.print("Next holidays");
+
+  int listY = calY + 14;
+  if (g_app.holidayCount <= 0 || nextIndex < 0) {
+    g_app.tft.setTextColor(TFT_YELLOW);
+    g_app.tft.setCursor(panelX, listY);
+    g_app.tft.print("No data");
+  } else {
+    for (int i = nextIndex; i < g_app.holidayCount && i < nextIndex + 4; ++i) {
+      g_app.tft.setTextColor(TFT_CYAN);
+      g_app.tft.setCursor(panelX, listY);
+      g_app.tft.print(g_app.holidays[i].date + 5);
+      g_app.tft.setTextColor(TFT_WHITE);
+      g_app.tft.setCursor(panelX + 40, listY);
+      String name = g_app.holidays[i].localName;
+      if (name.length() > 14) {
+        name = name.substring(0, 14);
+      }
+      g_app.tft.print(name);
+      listY += 14;
+    }
+  }
+
+  drawFooter("Wk=ISO week, cyan=holiday", "B refresh holidays");
+}
+
+void drawSystemHealthScreen() {
+  g_app.tft.fillScreen(TFT_BLACK);
+  drawHeader("System health");
+  FastLED.clear(true);
+
+  g_app.tft.setTextSize(1);
+  int y = 30;
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("WiFi: %s", WiFi.status() == WL_CONNECTED ? "connected" : "disconnected");
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  if (WiFi.status() == WL_CONNECTED) {
+    g_app.tft.printf("RSSI: %d dBm", WiFi.RSSI());
+  } else {
+    g_app.tft.print("RSSI: n/a");
+  }
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Uptime: %s", formatUptime(millis()).c_str());
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Heap free: %u KB", ESP.getFreeHeap() / 1024U);
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Heap min: %u KB", ESP.getMinFreeHeap() / 1024U);
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Power save: %s", g_app.powerSaveActive ? "ON" : "OFF");
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Clock sync: %s", g_app.gotTime ? "ok" : "missing");
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Last sync: %s", formatEpoch(g_app.lastDataSyncEpoch).c_str());
+  y += 14;
+
+  g_app.tft.setCursor(4, y);
+  g_app.tft.printf("Battery: n/a");
+
+  drawFooter("Health diagnostics", "Manual refresh: press B");
+}
+
 void drawCurrentScreen() {
   if (g_app.activeScreen == SCREEN_PRICE_TODAY || g_app.activeScreen == SCREEN_PRICE_TOMORROW) {
     drawMainScreen();
@@ -538,6 +784,12 @@ void drawCurrentScreen() {
     drawStocksScreen();
   } else if (g_app.activeScreen == SCREEN_TRAINS) {
     drawTrainsScreen();
+  } else if (g_app.activeScreen == SCREEN_CALENDAR) {
+    drawCalendarScreen();
+  } else if (g_app.activeScreen == SCREEN_SYSTEM_HEALTH) {
+    drawSystemHealthScreen();
+  } else if (g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY) {
+    drawRainAirQualityScreen();
   }
 }
 
@@ -581,4 +833,32 @@ void drawRefreshError() {
   g_app.tft.setTextSize(2);
   g_app.tft.setCursor(4, 92);
   g_app.tft.print("Unable to refresh data.");
+}
+
+void drawRainAirQualityScreen() {
+  g_app.tft.fillScreen(TFT_BLACK);
+  drawHeader("Rain & Air Quality");
+  g_app.tft.setTextSize(2);
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setCursor(4, 40);
+  g_app.tft.print("Rain 1h:");
+  if (g_app.rainCount > 0) {
+    g_app.tft.setTextColor(TFT_CYAN);
+    g_app.tft.setCursor(4, 70);
+    g_app.tft.printf("%.1fmm", g_app.rainNext60m[0].precipitationMm);
+  }
+  g_app.tft.setTextSize(2);
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setCursor(4, 110);
+  g_app.tft.print("AQI:");
+  int aqi = g_app.airQuality.aqiUS;
+  g_app.tft.setTextColor(aqi > 100 ? TFT_RED : (aqi > 50 ? TFT_YELLOW : TFT_GREEN));
+  g_app.tft.setTextSize(3);
+  g_app.tft.setCursor(4, 150);
+  g_app.tft.printf("%d", aqi);
+  g_app.tft.setTextSize(1);
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setCursor(4, 200);
+  g_app.tft.printf("PM2.5:%.1f PM10:%.1f", g_app.airQuality.pm25, g_app.airQuality.pm10);
+  drawFooter("", "");
 }
