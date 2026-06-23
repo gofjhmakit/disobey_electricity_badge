@@ -38,8 +38,8 @@ struct TrainCandidate {
 };
 
 static bool fetchRawGzipResponse(int &statusCode, bool &isGzip, std::vector<uint8_t> &body);
-static bool gunzipToString(const uint8_t *compressed, size_t compressedLen, String &out);
-static bool parseTrainPayload(const String &payload, TrainItem *outItems, int &outCount);
+static bool gunzipToBuffer(const uint8_t *compressed, size_t compressedLen, std::vector<uint8_t> &out);
+static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem *outItems, int &outCount);
 
 static uint32_t readLe32(const uint8_t *src) {
   return (uint32_t)src[0] |
@@ -225,7 +225,7 @@ static bool fetchRawGzipResponse(int &statusCode, bool &isGzip, std::vector<uint
   return ok;
 }
 
-static bool gunzipToString(const uint8_t *compressed, size_t compressedLen, String &out) {
+static bool gunzipToBuffer(const uint8_t *compressed, size_t compressedLen, std::vector<uint8_t> &out) {
   if (compressedLen < 18 || compressed[0] != 0x1f || compressed[1] != 0x8b || compressed[2] != 8) {
     debugLog("Digitraffic gzip: invalid header");
     return false;
@@ -324,14 +324,7 @@ static bool gunzipToString(const uint8_t *compressed, size_t compressedLen, Stri
     return false;
   }
 
-  char *text = (char *)malloc(outOfs + 1);
-  if (!text) {
-    return false;
-  }
-  memcpy(text, inflated.data(), outOfs);
-  text[outOfs] = '\0';
-  out = String(text);
-  free(text);
+  out.swap(inflated);
   return true;
 }
 
@@ -417,10 +410,10 @@ static String eventIsoUtc(const JsonObject &row) {
   return "";
 }
 
-static bool parseTrainPayload(const String &payload, TrainItem *outItems, int &outCount) {
+static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem *outItems, int &outCount) {
   outCount = 0;
   DynamicJsonDocument doc(65536);
-  DeserializationError error = deserializeJson(doc, payload);
+  DeserializationError error = deserializeJson(doc, payload, payloadLen);
   if (error) {
     debugLog("Train JSON parse failed:", error.c_str());
     return false;
@@ -513,7 +506,13 @@ bool fetchTrains() {
 
   int rc = -1;
   bool isGzip = false;
-  std::vector<uint8_t> body;
+  static std::vector<uint8_t> body;
+  static std::vector<uint8_t> inflated;
+  body.clear();
+  inflated.clear();
+  body.reserve(96 * 1024);
+  inflated.reserve(192 * 1024);
+
   if (!fetchRawGzipResponse(rc, isGzip, body)) {
     logNetworkResponse("TRAIN", rc, 0);
     debugLog("fetchTrains: request failed");
@@ -529,29 +528,30 @@ bool fetchTrains() {
     return false;
   }
 
-  String payload;
+  const char *payloadData = nullptr;
+  size_t payloadLen = 0;
   if (isGzip) {
-    if (!gunzipToString(body.data(), body.size(), payload)) {
+    if (!gunzipToBuffer(body.data(), body.size(), inflated)) {
       logNetworkResponse("TRAIN", rc, 0);
       debugLog("fetchTrains: gzip decode failed");
       return false;
     }
+    payloadData = reinterpret_cast<const char *>(inflated.data());
+    payloadLen = inflated.size();
   } else {
-    payload.reserve(body.size() + 1);
-    for (size_t i = 0; i < body.size(); ++i) {
-      payload += (char)body[i];
-    }
+    payloadData = reinterpret_cast<const char *>(body.data());
+    payloadLen = body.size();
   }
 
   TrainItem fetchedTrains[MAX_TRAINS];
   int fetchedCount = 0;
-  if (!parseTrainPayload(payload, fetchedTrains, fetchedCount)) {
-    logNetworkResponse("TRAIN", rc, payload.length());
+  if (!parseTrainPayload(payloadData, payloadLen, fetchedTrains, fetchedCount)) {
+    logNetworkResponse("TRAIN", rc, payloadLen);
     debugLog("fetchTrains: parse failed");
     return false;
   }
 
-  logNetworkResponse("TRAIN", rc, payload.length());
+  logNetworkResponse("TRAIN", rc, payloadLen);
   g_app.trainCount = 0;
   for (int i = 0; i < fetchedCount && i < MAX_TRAINS; ++i) {
     g_app.trains[g_app.trainCount] = fetchedTrains[i];
