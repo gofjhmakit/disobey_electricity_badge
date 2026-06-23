@@ -12,6 +12,20 @@
 #include <WiFi.h>
 #include <Esp.h>
 
+struct AirQualityLevel {
+  const char *label;
+  const char *emoji;
+  uint16_t color;
+};
+
+static AirQualityLevel classifyAqi(int aqi) {
+  if (aqi <= 25) return {"EXCELLENT", ":D", TFT_GREEN};
+  if (aqi <= 50) return {"GOOD", ":)", TFT_CYAN};
+  if (aqi <= 100) return {"OK", ":|", TFT_YELLOW};
+  if (aqi <= 150) return {"BAD", ":(", 0xFD20};  // orange
+  return {"HORRIBLE", "X(", TFT_RED};
+}
+
 void initDisplay() {
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
@@ -846,19 +860,29 @@ void drawRainAirQualityScreen() {
     g_app.tft.setTextColor(TFT_CYAN);
     g_app.tft.setCursor(4, 70);
     g_app.tft.printf("%.1fmm", g_app.rainNext60m[0].precipitationMm);
+  } else {
+    g_app.tft.setTextColor(TFT_YELLOW);
+    g_app.tft.setCursor(4, 70);
+    g_app.tft.print("--");
   }
   g_app.tft.setTextSize(2);
   g_app.tft.setTextColor(TFT_WHITE);
-  g_app.tft.setCursor(4, 110);
+  g_app.tft.setCursor(4, 92);
   g_app.tft.print("AQI:");
   int aqi = g_app.airQuality.aqiUS;
-  g_app.tft.setTextColor(aqi > 100 ? TFT_RED : (aqi > 50 ? TFT_YELLOW : TFT_GREEN));
+  AirQualityLevel level = classifyAqi(aqi);
+  g_app.tft.setTextColor(level.color);
   g_app.tft.setTextSize(3);
-  g_app.tft.setCursor(4, 150);
+  g_app.tft.setCursor(4, 112);
   g_app.tft.printf("%d", aqi);
+  g_app.tft.setTextSize(2);
+  g_app.tft.setCursor(90, 114);
+  g_app.tft.printf("%s %s", level.label, level.emoji);
   g_app.tft.setTextSize(1);
   g_app.tft.setTextColor(TFT_WHITE);
-  g_app.tft.setCursor(4, 200);
-  g_app.tft.printf("PM2.5:%.1f PM10:%.1f", g_app.airQuality.pm25, g_app.airQuality.pm10);
-  drawFooter("", "");
+  g_app.tft.setCursor(4, 138);
+  g_app.tft.printf("PM2.5: %.1f  PM10: %.1f  NO2: %d  O3: %d",
+                   g_app.airQuality.pm25, g_app.airQuality.pm10,
+                   g_app.airQuality.no2, g_app.airQuality.o3);
+  drawFooter("B refresh", "");
 }

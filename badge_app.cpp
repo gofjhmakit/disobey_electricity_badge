@@ -9,6 +9,8 @@
 #include "nordpool_client.h"
 #include "power_save.h"
 #include "price_cache.h"
+#include "holiday_client.h"
+#include "rain_air_client.h"
 #include "settings_store.h"
 #include "stocks_client.h"
 #include "time_utils.h"
@@ -218,6 +220,12 @@ void badgeAppLoop() {
       } else {
         debugLog("Stock refresh skipped: rate limited");
       }
+      if (g_app.activeScreen == SCREEN_CALENDAR) {
+        fetchFinlandPublicHolidays();
+      }
+      if (g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY) {
+        fetchRainAndAirQuality();
+      }
       drawCurrentScreen();
     } else {
       drawRefreshError();
@@ -281,6 +289,34 @@ void badgeAppLoop() {
   if (now - g_app.lastTrainFetchMs > TRAIN_FETCH_INTERVAL_MS) {
     if (WiFi.status() == WL_CONNECTED && fetchTrains() && !g_app.powerSaveActive &&
         g_app.activeScreen == SCREEN_TRAINS) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - g_app.lastHolidayFetchMs > HOLIDAY_FETCH_INTERVAL_MS) {
+    if (WiFi.status() == WL_CONNECTED && fetchFinlandPublicHolidays() && !g_app.powerSaveActive &&
+        g_app.activeScreen == SCREEN_CALENDAR) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - g_app.lastRainAirFetchMs > RAIN_AIR_FETCH_INTERVAL_MS) {
+    if (WiFi.status() == WL_CONNECTED && fetchRainAndAirQuality() && !g_app.powerSaveActive &&
+        g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (WiFi.status() == WL_CONNECTED && g_app.activeScreen == SCREEN_CALENDAR && g_app.holidayCount == 0 &&
+      now - g_app.lastHolidayFetchMs > 5000) {
+    if (fetchFinlandPublicHolidays() && !g_app.powerSaveActive) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (WiFi.status() == WL_CONNECTED && g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY &&
+      g_app.rainCount == 0 && g_app.airQuality.aqiUS <= 0 && now - g_app.lastRainAirFetchMs > 5000) {
+    if (fetchRainAndAirQuality() && !g_app.powerSaveActive) {
       drawCurrentScreen();
     }
   }

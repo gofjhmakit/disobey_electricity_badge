@@ -28,7 +28,7 @@ const char *kDigitrafficPath =
 const char *kDigitrafficUserHeader = "Nimimerkki/EsimerkkiApp 0.1";
 
 struct TrainCandidate {
-  String sortIsoUtc;
+  time_t sortEpochUtc = 0;
   String localTime;
   String trainLabel;
   String destination;
@@ -342,35 +342,51 @@ static bool gunzipToBuffer(const uint8_t *compressed, size_t compressedLen, std:
   return true;
 }
 
-static String nowIsoUtcNoMillis() {
-  time_t now = time(nullptr);
-  tm utc;
-  gmtime_r(&now, &utc);
-  char buf[20];
-  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &utc);
-  return String(buf);
+static bool parseIsoUtcToEpoch(const char *isoUtc, time_t &outEpoch) {
+  if (!isoUtc || strlen(isoUtc) < 19) {
+    return false;
+  }
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  if (sscanf(isoUtc, "%4d-%2d-%2dT%2d:%2d:%2d",
+             &year, &month, &day, &hour, &minute, &second) != 6) {
+    return false;
+  }
+  tm utc = {};
+  utc.tm_year = year - 1900;
+  utc.tm_mon = month - 1;
+  utc.tm_mday = day;
+  utc.tm_hour = hour;
+  utc.tm_min = minute;
+  utc.tm_sec = second;
+  int y = utc.tm_year + 1900;
+  int m = utc.tm_mon + 1;
+  int d = utc.tm_mday;
+  y -= (m <= 2);
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);                     // [0, 399]
+  const unsigned doy = (153u * (unsigned)(m + (m > 2 ? -3 : 9)) + 2u) / 5u + (unsigned)d - 1u;
+  const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;      // [0, 146096]
+  const int daysSinceEpoch = era * 146097 + (int)doe - 719468;         // 1970-01-01 offset
+  const int64_t epoch64 = (int64_t)daysSinceEpoch * 86400LL +
+                          (int64_t)utc.tm_hour * 3600LL +
+                          (int64_t)utc.tm_min * 60LL +
+                          (int64_t)utc.tm_sec;
+  time_t epoch = (time_t)epoch64;
+  if (epoch <= 0) {
+    return false;
+  }
+  outEpoch = epoch;
+  return true;
 }
 
-static String isoUtcToLocalHHMM(const String &isoUtc) {
-  if (isoUtc.length() < 16) {
+static String epochUtcToLocalHHMM(time_t epochUtc) {
+  if (epochUtc <= 0) {
     return "--:--";
   }
-  int hour = isoUtc.substring(11, 13).toInt();
-  int minute = isoUtc.substring(14, 16).toInt();
-
-  time_t now = time(nullptr);
-  tm localNow;
-  tm utcNow;
-  localtime_r(&now, &localNow);
-  gmtime_r(&now, &utcNow);
-  int offsetMinutes = (int)(difftime(mktime(&localNow), mktime(&utcNow)) / 60.0);
-
-  int localMinutes = hour * 60 + minute + offsetMinutes;
-  while (localMinutes < 0) localMinutes += 24 * 60;
-  while (localMinutes >= 24 * 60) localMinutes -= 24 * 60;
-
+  tm localTm;
+  localtime_r(&epochUtc, &localTm);
   char out[6];
-  snprintf(out, sizeof(out), "%02d:%02d", localMinutes / 60, localMinutes % 60);
+  snprintf(out, sizeof(out), "%02d:%02d", localTm.tm_hour, localTm.tm_min);
   return String(out);
 }
 
@@ -412,16 +428,16 @@ static String terminalStationFor(const JsonArray &rows) {
   return station;
 }
 
-static String eventIsoUtc(const JsonObject &row) {
+static bool eventEpochUtc(const JsonObject &row, time_t &outEpoch) {
   const char *estimate = row["liveEstimateTime"] | "";
-  if (estimate && strlen(estimate) >= 19) {
-    return String(estimate).substring(0, 19);
+  if (estimate && strlen(estimate) >= 19 && parseIsoUtcToEpoch(estimate, outEpoch)) {
+    return true;
   }
   const char *scheduled = row["scheduledTime"] | "";
-  if (scheduled && strlen(scheduled) >= 19) {
-    return String(scheduled).substring(0, 19);
+  if (scheduled && strlen(scheduled) >= 19 && parseIsoUtcToEpoch(scheduled, outEpoch)) {
+    return true;
   }
-  return "";
+  return false;
 }
 
 static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem *outItems, int &outCount) {
@@ -442,7 +458,7 @@ static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem 
   std::vector<TrainCandidate> candidates;
   candidates.reserve(16);
   const String stationCode = "JY";
-  const String nowIso = nowIsoUtcNoMillis();
+  const time_t nowEpoch = time(nullptr);
 
   for (JsonObject train : trains) {
     JsonArray rows = train["timeTableRows"].as<JsonArray>();
@@ -470,15 +486,18 @@ static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem 
         continue;
       }
 
-      String isoUtc = eventIsoUtc(row);
-      if (isoUtc.length() == 0 || isoUtc < nowIso) {
+      time_t eventEpoch = 0;
+      if (!eventEpochUtc(row, eventEpoch)) {
+        continue;
+      }
+      if (eventEpoch <= nowEpoch) {
         continue;
       }
 
       const char *track = row["commercialTrack"] | "";
       TrainCandidate candidate;
-      candidate.sortIsoUtc = isoUtc;
-      candidate.localTime = isoUtcToLocalHHMM(isoUtc);
+      candidate.sortEpochUtc = eventEpoch;
+      candidate.localTime = epochUtcToLocalHHMM(eventEpoch);
       candidate.trainLabel = label;
       candidate.destination = destination;
       candidate.track = (track && track[0] != '\0') ? String(track) : "-";
@@ -491,7 +510,7 @@ static bool parseTrainPayload(const char *payload, size_t payloadLen, TrainItem 
 
   std::sort(candidates.begin(), candidates.end(),
             [](const TrainCandidate &a, const TrainCandidate &b) {
-              return a.sortIsoUtc < b.sortIsoUtc;
+              return a.sortEpochUtc < b.sortEpochUtc;
             });
 
   for (size_t i = 0; i < candidates.size() && outCount < MAX_TRAINS; ++i) {
