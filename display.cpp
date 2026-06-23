@@ -454,6 +454,73 @@ void drawStocksScreen() {
   drawFooter("B to refresh.", footerMsg);
 }
 
+void drawTrainsScreen() {
+  g_app.tft.fillScreen(TFT_BLACK);
+  drawHeader("Jyväskylä station - next 6 trains");
+  FastLED.clear(true);
+
+  if (g_app.trainCount <= 0) {
+    g_app.tft.setTextColor(TFT_YELLOW);
+    g_app.tft.setTextSize(2);
+    g_app.tft.setCursor(4, 70);
+    g_app.tft.print("No train data.");
+    drawFooter("Press B to refresh.", "Needs Digitraffic API access.");
+    return;
+  }
+
+  g_app.tft.setTextSize(1);
+  g_app.tft.setTextColor(TFT_LIGHTGREY);
+  g_app.tft.setCursor(4, 28);
+  g_app.tft.print("Time");
+  g_app.tft.setCursor(46, 28);
+  g_app.tft.print("Dir");
+  g_app.tft.setCursor(86, 28);
+  g_app.tft.print("Train");
+  g_app.tft.setCursor(140, 28);
+  g_app.tft.print("End");
+  g_app.tft.setCursor(264, 28);
+  g_app.tft.print("Trk");
+
+  int y = 44;
+  for (int i = 0; i < g_app.trainCount && i < MAX_TRAINS; ++i) {
+    TrainItem &train = g_app.trains[i];
+
+    g_app.tft.setTextColor(TFT_WHITE);
+    g_app.tft.setCursor(4, y);
+    g_app.tft.print(train.localTime);
+
+    g_app.tft.setTextColor(train.isArrival ? TFT_GREEN : TFT_RED);
+    g_app.tft.setCursor(46, y);
+    g_app.tft.print(train.isArrival ? "ARR" : "DEP");
+
+    g_app.tft.setTextColor(TFT_WHITE);
+    g_app.tft.setCursor(86, y);
+    g_app.tft.print(train.trainLabel);
+    if (train.cancelled) {
+      g_app.tft.setTextColor(TFT_ORANGE);
+      g_app.tft.print(" C");
+    }
+
+    g_app.tft.setTextColor(TFT_CYAN);
+    g_app.tft.setCursor(140, y);
+    g_app.tft.print(train.destination);
+
+    g_app.tft.setTextColor(TFT_WHITE);
+    g_app.tft.setCursor(264, y);
+    g_app.tft.print(train.track);
+
+    if (train.delayMinutes != 0) {
+      g_app.tft.setTextColor(train.delayMinutes > 0 ? TFT_ORANGE : TFT_GREEN);
+      g_app.tft.setCursor(284, y);
+      g_app.tft.printf("%+d", train.delayMinutes);
+    }
+
+    y += 18;
+  }
+
+  drawFooter("Green=arrival, red=departure", "End=terminal station code");
+}
+
 void drawCurrentScreen() {
   if (g_app.activeScreen == SCREEN_PRICE_TODAY || g_app.activeScreen == SCREEN_PRICE_TOMORROW) {
     drawMainScreen();
@@ -469,6 +536,8 @@ void drawCurrentScreen() {
     drawKeskiSuomiNewsScreen();
   } else if (g_app.activeScreen == SCREEN_STOCKS) {
     drawStocksScreen();
+  } else if (g_app.activeScreen == SCREEN_TRAINS) {
+    drawTrainsScreen();
   }
 }
 

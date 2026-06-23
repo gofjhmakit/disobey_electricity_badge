@@ -33,6 +33,10 @@ struct AppState {
   unsigned long lastStockFetchMs = 0;
   unsigned long stockRateLimitUntilMs = 0;
   time_t lastStockMarketTimestamp = 0;
+  
+  TrainItem trains[MAX_TRAINS];
+  int trainCount = 0;
+  unsigned long lastTrainFetchMs = 0;
 
   ButtonState buttons[10];
 

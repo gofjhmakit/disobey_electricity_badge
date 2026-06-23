@@ -12,6 +12,7 @@
 #include "settings_store.h"
 #include "stocks_client.h"
 #include "time_utils.h"
+#include "trains_client.h"
 #include "weather_client.h"
 #include "wifi_manager.h"
 
@@ -94,6 +95,7 @@ void badgeAppSetup() {
     if (millis() >= g_app.stockRateLimitUntilMs) {
       fetchStocks();
     }
+    fetchTrains();
   } else {
     debugLog("WiFi connection failed.");
     if (!hadCache) {
@@ -214,6 +216,7 @@ void badgeAppLoop() {
       } else {
         debugLog("Stock refresh skipped: rate limited");
       }
+      fetchTrains();
       drawCurrentScreen();
     } else {
       drawRefreshError();
@@ -270,6 +273,13 @@ void badgeAppLoop() {
     if (WiFi.status() == WL_CONNECTED && !g_app.powerSaveActive &&
         g_app.activeScreen == SCREEN_STOCKS) {
       fetchStocks();
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - g_app.lastTrainFetchMs > TRAIN_FETCH_INTERVAL_MS) {
+    if (WiFi.status() == WL_CONNECTED && fetchTrains() && !g_app.powerSaveActive &&
+        g_app.activeScreen == SCREEN_TRAINS) {
       drawCurrentScreen();
     }
   }

@@ -34,6 +34,16 @@ struct StockItem {
   bool fetched;
 };
 
+struct TrainItem {
+  char localTime[6];
+  char trainLabel[12];
+  char destination[12];
+  char track[6];
+  int delayMinutes;
+  bool isArrival;
+  bool cancelled;
+};
+
 struct BadgeSettings {
   String ssid;
   String password;

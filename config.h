@@ -27,6 +27,7 @@
 #define MAX_WEATHER_DAYS 7
 #define MAX_NEWS_ITEMS   5
 #define MAX_STOCKS       8
+#define MAX_TRAINS       6
 
 // Screen IDs
 #define SCREEN_PRICE_TODAY      0
@@ -37,7 +38,8 @@
 #define SCREEN_NEWS_KOTIMAA     5
 #define SCREEN_NEWS_KESKI_SUOMI 6
 #define SCREEN_STOCKS           7
-#define SCREEN_COUNT            8
+#define SCREEN_TRAINS           8
+#define SCREEN_COUNT            9
 
 // Weather categories (for LED animations)
 #define WEATHER_CLEAR   0
@@ -50,6 +52,7 @@
 // Fetch intervals
 #define STOCK_FETCH_INTERVAL_MS (60UL * 60UL * 1000UL)
 #define STOCK_RATE_LIMIT_MS     (60UL * 60UL * 1000UL)
+#define TRAIN_FETCH_INTERVAL_MS (2UL * 60UL * 1000UL)
 
 // Power save
 #define POWER_SAVE_TIMEOUT_MS       (10UL * 60UL * 1000UL)

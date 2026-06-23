@@ -15,6 +15,7 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 - Color-coded thresholds and LED ring status
 - Settings screen for cheap/moderate thresholds and LED brightness
 - Local cache using LittleFS for offline fallback
+- Jyväskylä station train screen from Digitraffic (next 6 arrivals/departures)
 
 ## Hardware
 
@@ -61,8 +62,8 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 ## TODO
 
 1. [x] Alternate screen for RSS News reader for Yle Kotimaa news
-2. Add VR Jyväskylä Station schedule for arriving and leaving trains (clearly indicated whether leaving or arriving) 
-2.1 This is difficult due to digitraffic api using gzip. 
+2. [x] Add VR Jyväskylä Station schedule for arriving and leaving trains (clearly indicated whether leaving or arriving) 
+2.1 [x] Handle Digitraffic gzip-compressed API responses.
 3. Flight Radar centered for Muurame (small map of muurame borders, and locations of planes on map)
 4. [x] Weather Forecast for today and tomorrow with nice visuals
 5. [x] Even in the battery saving mode, it should every hour at X:00 update the two leds, without turning the screen or other leds on.
@@ -75,3 +76,8 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
   - Sampo A
   - Tieto
   - OMXHPI
+7. Calendar screen (today + next event from Google/ICS export feed)
+8. Rain-now screen (simple "rain next 60 min" from FMI/Open-Meteo endpoints)
+9. Air quality + pollen screen (single number + color code)
+10. Battery/uptime/system health screen (Wi-Fi RSSI, free heap, uptime, last sync)
+11. On-this-day trivia screen (daily fact feed)

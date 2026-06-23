@@ -13,6 +13,7 @@ void drawNewsScreenList(const String &header, NewsItem *items, int count);
 void drawKotimaaNewsScreen();
 void drawKeskiSuomiNewsScreen();
 void drawStocksScreen();
+void drawTrainsScreen();
 void drawCurrentScreen();
 void drawSettingsScreen();
 void drawConfigMode();
