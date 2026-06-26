@@ -62,9 +62,26 @@ struct AirQualityData {
   int o3;
 };
 
+struct TriviaItem {
+  int year;
+  char text[220];
+};
+
+struct BusTripItem {
+  char title[40];
+  char line[16];
+  char fromStop[28];
+  char toStop[28];
+  char departLocal[6];
+  char arriveLocal[6];
+  int durationMin;
+  bool available;
+};
+
 struct BadgeSettings {
   String ssid;
   String password;
+  String digitransitApiKey;
   String area;
   float thresholdCheap;
   float thresholdModerate;

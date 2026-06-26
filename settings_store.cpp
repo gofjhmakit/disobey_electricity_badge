@@ -9,10 +9,12 @@
 void loadDefaults() {
   g_app.settings.ssid = "x";
   g_app.settings.password = "x";
+  g_app.settings.digitransitApiKey = "x";
   g_app.settings.area = "FI";
   g_app.settings.thresholdCheap = 3;
   g_app.settings.thresholdModerate = 7;
   g_app.settings.ledBrightness = 3;
+  
 }
 
 bool loadSettings() {
@@ -42,6 +44,7 @@ bool loadSettings() {
 
   g_app.settings.ssid = doc["ssid"].as<String>();
   g_app.settings.password = doc["password"].as<String>();
+  g_app.settings.digitransitApiKey = doc["digitransitApiKey"] | g_app.settings.digitransitApiKey;
   g_app.settings.area = doc["area"].as<String>();
   g_app.settings.thresholdCheap = doc["thresholdCheap"] | 2.5;
   g_app.settings.thresholdModerate = doc["thresholdModerate"] | 4.5;
@@ -57,6 +60,7 @@ void saveSettings() {
   DynamicJsonDocument doc(2048);
   doc["ssid"] = g_app.settings.ssid;
   doc["password"] = g_app.settings.password;
+  doc["digitransitApiKey"] = g_app.settings.digitransitApiKey;
   doc["area"] = g_app.settings.area;
   doc["thresholdCheap"] = g_app.settings.thresholdCheap;
   doc["thresholdModerate"] = g_app.settings.thresholdModerate;

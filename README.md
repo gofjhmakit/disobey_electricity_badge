@@ -20,6 +20,8 @@ ESP32 Arduino sketch for a wide ST7789 badge that fetches Nordpool electricity p
 - Rain-now screen (next 60 min hourly precipitation from Open-Meteo)
 - Air quality screen (AQI, PM2.5, PM10, NO2, O3 from Open-Meteo with color-coded air quality)
 - System health screen (WiFi signal strength, free heap, uptime, last data sync time)
+- On-this-day trivia screen (daily historical event from Wikimedia/Wikipedia feed)
+- Bus trips screen (Muurame <-> Jyväskylä next route summary via Digitransit Waltti)
 
 ## Hardware
 
@@ -96,4 +98,11 @@ Without the 3MB partition scheme, the sketch will not fit (it uses ~1.56MB, exce
 8. [x] Rain-now screen (simple "rain next 60 min" from Open-Meteo)
 9. [x] Air quality + pollen screen (AQI, PM2.5, PM10, NO2, O3 from Open-Meteo)
 10. [x] Battery/uptime/system health screen (Wi-Fi RSSI, free heap, uptime, last sync)
-11. On-this-day trivia screen (daily fact feed)
+11. [x] On-this-day trivia screen (daily fact feed)
+12. Name day screen (today + tomorrow, Finland)
+13. Sunrise/sunset + day length screen (Jyväskylä)
+14. Road weather / warnings screen (local traffic alerts)
+15. [x] Bus trips screen (next departures and best route):
+  - Lahdenranta 14, Muurame -> Kauppakatu 31, Jyväskylä
+  - Kauppakatu 31, Jyväskylä -> Lahdenranta 14, Muurame
+16. Best electricity hours recommendation screen (cheapest upcoming hours)

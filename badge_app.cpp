@@ -11,10 +11,12 @@
 #include "price_cache.h"
 #include "holiday_client.h"
 #include "rain_air_client.h"
+#include "bus_client.h"
 #include "settings_store.h"
 #include "stocks_client.h"
 #include "time_utils.h"
 #include "trains_client.h"
+#include "trivia_client.h"
 #include "weather_client.h"
 #include "wifi_manager.h"
 
@@ -96,6 +98,7 @@ void badgeAppSetup() {
     fetchWeatherForecast();
     fetchKotimaaNews();
     fetchKeskiSuomiNews();
+    fetchOnThisDayTrivia();
     if (millis() >= g_app.stockRateLimitUntilMs) {
       fetchStocks();
     }
@@ -226,6 +229,12 @@ void badgeAppLoop() {
       if (g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY) {
         fetchRainAndAirQuality();
       }
+      if (g_app.activeScreen == SCREEN_ON_THIS_DAY) {
+        fetchOnThisDayTrivia();
+      }
+      if (g_app.activeScreen == SCREEN_BUS_TRIPS) {
+        fetchBusTrips();
+      }
       drawCurrentScreen();
     } else {
       drawRefreshError();
@@ -317,6 +326,35 @@ void badgeAppLoop() {
   if (WiFi.status() == WL_CONNECTED && g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY &&
       g_app.rainCount == 0 && g_app.airQuality.aqiUS <= 0 && now - g_app.lastRainAirFetchMs > 5000) {
     if (fetchRainAndAirQuality() && !g_app.powerSaveActive) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - g_app.lastTriviaFetchMs > TRIVIA_FETCH_INTERVAL_MS) {
+    if (WiFi.status() == WL_CONNECTED && fetchOnThisDayTrivia() && !g_app.powerSaveActive &&
+        g_app.activeScreen == SCREEN_ON_THIS_DAY) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (WiFi.status() == WL_CONNECTED && g_app.activeScreen == SCREEN_ON_THIS_DAY &&
+      !g_app.hasOnThisDay && now - g_app.lastTriviaFetchMs > 5000) {
+    if (fetchOnThisDayTrivia() && !g_app.powerSaveActive) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (now - g_app.lastBusTripFetchMs > BUS_TRIP_FETCH_INTERVAL_MS) {
+    if (WiFi.status() == WL_CONNECTED && g_app.activeScreen == SCREEN_BUS_TRIPS &&
+        fetchBusTrips() && !g_app.powerSaveActive) {
+      drawCurrentScreen();
+    }
+  }
+
+  if (WiFi.status() == WL_CONNECTED && g_app.activeScreen == SCREEN_BUS_TRIPS &&
+      !g_app.busTrips[0].available && !g_app.busTrips[1].available &&
+      now - g_app.lastBusTripFetchMs > 5000) {
+    if (fetchBusTrips() && !g_app.powerSaveActive) {
       drawCurrentScreen();
     }
   }

@@ -48,6 +48,11 @@ struct AppState {
   unsigned long lastRainAirFetchMs = 0;
   
   AirQualityData airQuality = {};
+  TriviaItem onThisDay = {};
+  bool hasOnThisDay = false;
+  unsigned long lastTriviaFetchMs = 0;
+  BusTripItem busTrips[2] = {};
+  unsigned long lastBusTripFetchMs = 0;
 
   ButtonState buttons[10];
 

@@ -17,6 +17,8 @@ void drawTrainsScreen();
 void drawCalendarScreen();
 void drawSystemHealthScreen();
 void drawRainAirQualityScreen();
+void drawOnThisDayScreen();
+void drawBusTripsScreen();
 void drawCurrentScreen();
 void drawSettingsScreen();
 void drawConfigMode();

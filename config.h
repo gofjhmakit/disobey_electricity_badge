@@ -44,7 +44,9 @@
 #define SCREEN_CALENDAR           9
 #define SCREEN_SYSTEM_HEALTH      10
 #define SCREEN_RAIN_AIR_QUALITY   11
-#define SCREEN_COUNT              12
+#define SCREEN_ON_THIS_DAY        12
+#define SCREEN_BUS_TRIPS          13
+#define SCREEN_COUNT              14
 
 // Weather categories (for LED animations)
 #define WEATHER_CLEAR   0
@@ -60,6 +62,8 @@
 #define TRAIN_FETCH_INTERVAL_MS (30UL * 60UL * 1000UL)
 #define HOLIDAY_FETCH_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL)
 #define RAIN_AIR_FETCH_INTERVAL_MS (30UL * 60UL * 1000UL)
+#define TRIVIA_FETCH_INTERVAL_MS  (24UL * 60UL * 60UL * 1000UL)
+#define BUS_TRIP_FETCH_INTERVAL_MS (10UL * 60UL * 1000UL)
 
 // Power save
 #define POWER_SAVE_TIMEOUT_MS       (10UL * 60UL * 1000UL)

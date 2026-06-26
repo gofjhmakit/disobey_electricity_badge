@@ -804,6 +804,10 @@ void drawCurrentScreen() {
     drawSystemHealthScreen();
   } else if (g_app.activeScreen == SCREEN_RAIN_AIR_QUALITY) {
     drawRainAirQualityScreen();
+  } else if (g_app.activeScreen == SCREEN_ON_THIS_DAY) {
+    drawOnThisDayScreen();
+  } else if (g_app.activeScreen == SCREEN_BUS_TRIPS) {
+    drawBusTripsScreen();
   }
 }
 
@@ -885,4 +889,76 @@ void drawRainAirQualityScreen() {
                    g_app.airQuality.pm25, g_app.airQuality.pm10,
                    g_app.airQuality.no2, g_app.airQuality.o3);
   drawFooter("B refresh", "");
+}
+
+void drawOnThisDayScreen() {
+  g_app.tft.fillScreen(TFT_BLACK);
+  drawHeader("On this day");
+  FastLED.clear(true);
+
+  if (!g_app.hasOnThisDay || g_app.onThisDay.text[0] == '\0') {
+    g_app.tft.setTextColor(TFT_YELLOW);
+    g_app.tft.setTextSize(2);
+    g_app.tft.setCursor(4, 70);
+    g_app.tft.print("No trivia available.");
+    drawFooter("Press B to refresh.", "Source: Wikimedia/Wikipedia");
+    return;
+  }
+
+  g_app.tft.setTextSize(2);
+  g_app.tft.setTextColor(TFT_CYAN);
+  g_app.tft.setCursor(4, 32);
+  g_app.tft.printf("%d", g_app.onThisDay.year);
+
+  g_app.tft.setTextSize(1);
+  g_app.tft.setTextColor(TFT_WHITE);
+  g_app.tft.setTextWrap(true);
+  g_app.tft.setCursor(4, 56);
+  g_app.tft.println(g_app.onThisDay.text);
+
+  drawFooter("Daily historical event", "Source: Wikimedia/Wikipedia");
+}
+
+void drawBusTripsScreen() {
+  g_app.tft.fillScreen(TFT_BLACK);
+  drawHeader("Bus trips (Waltti)");
+  FastLED.clear(true);
+
+  String key = g_app.settings.digitransitApiKey;
+  key.trim();
+  if (key.length() == 0 || key.equalsIgnoreCase("x")) {
+    g_app.tft.setTextColor(TFT_YELLOW);
+    g_app.tft.setTextSize(2);
+    g_app.tft.setCursor(4, 70);
+    g_app.tft.print("No Apikey");
+    drawFooter("Set digitransitApiKey", "in settings_store.cpp");
+    return;
+  }
+
+  g_app.tft.setTextSize(1);
+  for (int i = 0; i < 2; ++i) {
+    const BusTripItem &trip = g_app.busTrips[i];
+    int y = 30 + i * 60;
+    uint16_t titleColor = i == 0 ? TFT_CYAN : TFT_GREEN;
+    g_app.tft.setTextColor(titleColor);
+    g_app.tft.setCursor(4, y);
+    g_app.tft.print(trip.title[0] ? trip.title : (i == 0 ? "Muurame -> JKL" : "JKL -> Muurame"));
+
+    if (!trip.available) {
+      g_app.tft.setTextColor(TFT_YELLOW);
+      g_app.tft.setCursor(4, y + 14);
+      g_app.tft.print("No route right now");
+      continue;
+    }
+
+    g_app.tft.setTextColor(TFT_WHITE);
+    g_app.tft.setCursor(4, y + 14);
+    g_app.tft.printf("Line %s  %s -> %s", trip.line, trip.departLocal, trip.arriveLocal);
+    g_app.tft.setCursor(4, y + 28);
+    g_app.tft.printf("From: %s", trip.fromStop);
+    g_app.tft.setCursor(4, y + 42);
+    g_app.tft.printf("To:   %s  (%d min)", trip.toStop, trip.durationMin);
+  }
+
+  drawFooter("B refreshes route", "Uses Digitransit API key");
 }
